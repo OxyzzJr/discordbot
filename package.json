@@ -1,0 +1,13 @@
+{
+  "name": "mon-bot-discord",
+  "version": "1.0.0",
+  "description": "Bot Discord hébergé sur Render",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.11.0",
+    "dotenv": "^16.3.1"
+  }
+}

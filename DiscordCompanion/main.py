@@ -76,7 +76,7 @@ class ModerationBot(commands.Bot):
             await ctx.send("❌ J'ai pas les perms chef.")
         elif isinstance(error, commands.CommandOnCooldown):
             await ctx.send(
-                f"⏰ Command is on cooldown. Try again in {error.retry_after:.1f} seconds."
+                f"⏰ Cette commande est en cooldown. Réessayez dans {error.retry_after:.1f} secondes."
             )
         elif isinstance(error, commands.MemberNotFound):
             await ctx.send("❌ membre introuvable.")
@@ -85,11 +85,11 @@ class ModerationBot(commands.Bot):
 
 
 async def main():
+    # Start keep-alive server once (runs in daemon thread)
+    keep_alive()
+
     while True:
         bot = ModerationBot()
-
-        # Start keep-alive server for 24/7 uptime
-        keep_alive()
 
         # Get token from environment variable
         token = os.getenv('DISCORD_TOKEN')

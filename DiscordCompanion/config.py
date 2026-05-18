@@ -16,8 +16,8 @@ SPAM_THRESHOLD = int(os.getenv('SPAM_THRESHOLD', 5))
 SPAM_INTERVAL = int(os.getenv('SPAM_INTERVAL', 10))
 MAX_MENTIONS = int(os.getenv('MAX_MENTIONS', 5))
 
-# Database
-DATABASE_PATH = 'moderation.db'
+# Database — /data/moderation.db en Docker, sinon local
+DATABASE_PATH = os.getenv('DATABASE_PATH', 'moderation.db')
 
 # Colors for embeds
 COLORS = {

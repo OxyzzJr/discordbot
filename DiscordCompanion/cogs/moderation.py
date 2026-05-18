@@ -6,14 +6,23 @@ from utils.database import (
     add_warning, get_warnings, clear_warnings,
     add_mute, remove_mute, get_active_timed_mutes,
     add_tempban, deactivate_tempban, get_active_tempbans,
-    add_sanction, get_sanctions,
+    add_sanction, get_sanctions, get_case, edit_case_reason,
     add_blacklist_word, remove_blacklist_word, get_blacklist_words,
     update_guild_settings, get_guild_settings,
+    get_automod_config, update_automod_config,
+    get_violation_points, reset_violation_points,
     parse_duration, format_duration,
 )
+from utils.ui import PaginationView, ConfirmView, build_pages
 from config import COLORS, MAX_WARNINGS
 from datetime import datetime, timedelta
 import asyncio
+
+
+ACTION_EMOJIS = {
+    'kick': '👢', 'ban': '🔨', 'tempban': '⏱️',
+    'mute': '🔇', 'unmute': '🔊', 'warn': '⚠️', 'unban': '✅',
+}
 
 
 class Moderation(commands.Cog):
@@ -27,18 +36,16 @@ class Moderation(commands.Cog):
         self.check_expired_punishments.cancel()
 
     # ------------------------------------------------------------------
-    # Background task — punishments expirées
+    # Background task
     # ------------------------------------------------------------------
 
     @tasks.loop(minutes=1)
     async def check_expired_punishments(self):
         now = datetime.utcnow()
 
-        # Tempbans expirés
         for guild_id, user_id, unban_at_str in get_active_tempbans():
             try:
-                unban_at = datetime.fromisoformat(unban_at_str)
-                if now >= unban_at:
+                if now >= datetime.fromisoformat(unban_at_str):
                     guild = self.bot.get_guild(guild_id)
                     if guild:
                         try:
@@ -50,21 +57,19 @@ class Moderation(commands.Cog):
             except Exception:
                 pass
 
-        # Mutes temporaires expirés
-        mute_role_cache = {}
+        _mute_roles: dict[int, discord.Role] = {}
         for guild_id, user_id, unmute_at_str in get_active_timed_mutes():
             try:
-                unmute_at = datetime.fromisoformat(unmute_at_str)
-                if now >= unmute_at:
+                if now >= datetime.fromisoformat(unmute_at_str):
                     guild = self.bot.get_guild(guild_id)
                     if guild:
                         member = guild.get_member(user_id)
                         if member:
-                            if guild_id not in mute_role_cache:
-                                mute_role_cache[guild_id] = await ensure_mute_role(guild)
-                            mute_role = mute_role_cache[guild_id]
-                            if mute_role in member.roles:
-                                await member.remove_roles(mute_role, reason="Mute temporaire expiré automatiquement")
+                            if guild_id not in _mute_roles:
+                                _mute_roles[guild_id] = await ensure_mute_role(guild)
+                            r = _mute_roles[guild_id]
+                            if r in member.roles:
+                                await member.remove_roles(r, reason="Mute temporaire expiré")
                     remove_mute(guild_id, user_id)
             except Exception:
                 pass
@@ -74,6 +79,29 @@ class Moderation(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _case_footer(self, case_id: int, member_id: int) -> str:
+        return f"Case #{case_id} • ID : {member_id}"
+
+    async def _send_dm(self, member: discord.Member, embed: discord.Embed):
+        try:
+            await member.send(embed=embed)
+        except discord.Forbidden:
+            pass
+
+    async def _confirm_action(self, interaction: discord.Interaction, preview_embed: discord.Embed) -> bool:
+        """Affiche un embed de confirmation et retourne True si confirmé."""
+        view = ConfirmView(interaction.user.id)
+        await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=True)
+        await view.wait()
+        if not view.value:
+            annule = discord.Embed(title="❌ Action Annulée", color=COLORS['error'])
+            await interaction.edit_original_response(embed=annule, view=None)
+        return bool(view.value)
+
+    # ------------------------------------------------------------------
     # /kick
     # ------------------------------------------------------------------
 
@@ -81,38 +109,40 @@ class Moderation(commands.Cog):
     @app_commands.describe(member="Le membre à expulser", raison="Raison de l'expulsion")
     async def kick(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.kick_members:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission d'expulser des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission d'expulser des membres !", ephemeral=True)
         if not interaction.guild.me.guild_permissions.kick_members:
-            await interaction.response.send_message("❌ Je n'ai pas la permission d'expulser des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Je n'ai pas la permission d'expulser des membres !", ephemeral=True)
         if member.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
-            await interaction.response.send_message("❌ Vous ne pouvez pas expulser quelqu'un avec un rôle supérieur ou égal !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Rôle supérieur ou égal — action impossible !", ephemeral=True)
         if member.top_role >= interaction.guild.me.top_role:
-            await interaction.response.send_message("❌ Je ne peux pas expulser quelqu'un avec un rôle supérieur ou égal au mien !", ephemeral=True)
+            return await interaction.response.send_message("❌ Je ne peux pas agir sur ce membre (rôle supérieur au mien) !", ephemeral=True)
+
+        preview = discord.Embed(
+            title="👢 Confirmer l'Expulsion",
+            description=f"Vous êtes sur le point d'expulser **{member}**.",
+            color=COLORS['warning']
+        )
+        preview.add_field(name="Raison", value=raison)
+        if not await self._confirm_action(interaction, preview):
             return
+
         try:
-            try:
-                dm = discord.Embed(title="Vous avez été expulsé", description=f"Vous avez été expulsé de **{interaction.guild.name}**", color=COLORS['warning'])
-                dm.add_field(name="Raison", value=raison, inline=False)
-                dm.add_field(name="Modérateur", value=interaction.user.mention, inline=False)
-                await member.send(embed=dm)
-            except discord.Forbidden:
-                pass
+            await self._send_dm(member, discord.Embed(
+                title="Vous avez été expulsé",
+                description=f"Vous avez été expulsé de **{interaction.guild.name}**",
+                color=COLORS['warning']
+            ).add_field(name="Raison", value=raison).add_field(name="Modérateur", value=str(interaction.user)))
 
             await member.kick(reason=f"Expulsé par {interaction.user} | {raison}")
-            add_sanction(interaction.guild.id, member.id, interaction.user.id, 'kick', raison)
+            case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'kick', raison)
 
-            embed = discord.Embed(title="✅ Membre Expulsé", description=f"**{member}** a été expulsé", color=COLORS['success'])
+            embed = discord.Embed(title="✅ Membre Expulsé", description=f"**{member}** a été expulsé.", color=COLORS['success'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
-            embed.set_footer(text=f"ID Utilisateur : {member.id}")
-            await interaction.response.send_message(embed=embed)
+            embed.set_footer(text=self._case_footer(case_id, member.id))
+            await interaction.edit_original_response(embed=embed, view=None)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Je n'ai pas la permission d'expulser ce membre !", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
 
     # ------------------------------------------------------------------
     # /ban
@@ -122,186 +152,158 @@ class Moderation(commands.Cog):
     @app_commands.describe(member="Le membre à bannir", raison="Raison du bannissement", supprimer_jours="Jours de messages à supprimer (0-7)")
     async def ban(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie", supprimer_jours: int = 0):
         if not interaction.user.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir des membres !", ephemeral=True)
         if not interaction.guild.me.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de bannir des membres !", ephemeral=True)
-            return
-        if supprimer_jours < 0 or supprimer_jours > 7:
-            await interaction.response.send_message("❌ Les jours de suppression doivent être entre 0 et 7 !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Je n'ai pas la permission de bannir des membres !", ephemeral=True)
+        if not 0 <= supprimer_jours <= 7:
+            return await interaction.response.send_message("❌ Les jours doivent être entre 0 et 7 !", ephemeral=True)
         if member.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
-            await interaction.response.send_message("❌ Vous ne pouvez pas bannir quelqu'un avec un rôle supérieur ou égal !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Rôle supérieur ou égal — action impossible !", ephemeral=True)
         if member.top_role >= interaction.guild.me.top_role:
-            await interaction.response.send_message("❌ Je ne peux pas bannir quelqu'un avec un rôle supérieur ou égal au mien !", ephemeral=True)
+            return await interaction.response.send_message("❌ Je ne peux pas agir sur ce membre !", ephemeral=True)
+
+        preview = discord.Embed(title="🔨 Confirmer le Bannissement", description=f"Vous êtes sur le point de bannir **{member}**.", color=COLORS['error'])
+        preview.add_field(name="Raison", value=raison)
+        preview.add_field(name="Messages supprimés", value=f"{supprimer_jours} jours")
+        if not await self._confirm_action(interaction, preview):
             return
+
         try:
-            try:
-                dm = discord.Embed(title="Vous avez été banni", description=f"Vous avez été banni de **{interaction.guild.name}**", color=COLORS['error'])
-                dm.add_field(name="Raison", value=raison, inline=False)
-                dm.add_field(name="Modérateur", value=interaction.user.mention, inline=False)
-                await member.send(embed=dm)
-            except discord.Forbidden:
-                pass
+            dm = discord.Embed(title="Vous avez été banni", description=f"Vous avez été banni de **{interaction.guild.name}**", color=COLORS['error'])
+            dm.add_field(name="Raison", value=raison)
+            dm.add_field(name="Modérateur", value=str(interaction.user))
+            await self._send_dm(member, dm)
 
             await member.ban(reason=f"Banni par {interaction.user} | {raison}", delete_message_days=supprimer_jours)
-            add_sanction(interaction.guild.id, member.id, interaction.user.id, 'ban', raison)
+            case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'ban', raison)
 
-            embed = discord.Embed(title="🔨 Membre Banni", description=f"**{member}** a été banni", color=COLORS['error'])
+            embed = discord.Embed(title="🔨 Membre Banni", description=f"**{member}** a été banni.", color=COLORS['error'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
             embed.add_field(name="Messages Supprimés", value=f"{supprimer_jours} jours", inline=True)
-            embed.set_footer(text=f"ID Utilisateur : {member.id}")
-            await interaction.response.send_message(embed=embed)
+            embed.set_footer(text=self._case_footer(case_id, member.id))
+            await interaction.edit_original_response(embed=embed, view=None)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de bannir ce membre !", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
 
     # ------------------------------------------------------------------
     # /tempban
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="tempban", description="Bannir temporairement un membre du serveur")
-    @app_commands.describe(member="Le membre à bannir", duree="Durée (ex: 10m, 2h, 1d)", raison="Raison du bannissement")
+    @app_commands.command(name="tempban", description="Bannir temporairement un membre")
+    @app_commands.describe(member="Le membre à bannir", duree="Durée (ex: 10m, 2h, 1d)", raison="Raison")
     async def tempban(self, interaction: discord.Interaction, member: discord.Member, duree: str, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir des membres !", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de bannir des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission de bannir des membres !", ephemeral=True)
         if member.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
-            await interaction.response.send_message("❌ Vous ne pouvez pas bannir quelqu'un avec un rôle supérieur ou égal !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Rôle supérieur ou égal — action impossible !", ephemeral=True)
 
         seconds = parse_duration(duree)
         if seconds is None:
-            await interaction.response.send_message("❌ Format de durée invalide ! Exemples valides : `10m`, `2h`, `1d`, `30s`", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Format invalide. Exemples : `10m`, `2h`, `1d`", ephemeral=True)
 
         unban_at = datetime.utcnow() + timedelta(seconds=seconds)
         duree_lisible = format_duration(seconds)
 
+        preview = discord.Embed(title="⏱️ Confirmer le Bannissement Temporaire", description=f"Bannir **{member}** pendant **{duree_lisible}** ?", color=COLORS['error'])
+        preview.add_field(name="Raison", value=raison)
+        if not await self._confirm_action(interaction, preview):
+            return
+
         try:
-            try:
-                dm = discord.Embed(title="Vous avez été banni temporairement", description=f"Vous avez été banni de **{interaction.guild.name}**", color=COLORS['error'])
-                dm.add_field(name="Durée", value=duree_lisible, inline=False)
-                dm.add_field(name="Raison", value=raison, inline=False)
-                dm.add_field(name="Modérateur", value=interaction.user.mention, inline=False)
-                await member.send(embed=dm)
-            except discord.Forbidden:
-                pass
+            dm = discord.Embed(title="Vous avez été banni temporairement", description=f"Banni de **{interaction.guild.name}** pendant **{duree_lisible}**.", color=COLORS['error'])
+            dm.add_field(name="Raison", value=raison)
+            await self._send_dm(member, dm)
 
             await member.ban(reason=f"Tempban ({duree_lisible}) par {interaction.user} | {raison}")
             add_tempban(interaction.guild.id, member.id, interaction.user.id, raison, unban_at)
-            add_sanction(interaction.guild.id, member.id, interaction.user.id, 'tempban', raison, duree)
+            case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'tempban', raison, duree)
 
-            embed = discord.Embed(title="⏱️ Membre Banni Temporairement", description=f"**{member}** a été banni temporairement", color=COLORS['error'])
+            embed = discord.Embed(title="⏱️ Membre Banni Temporairement", description=f"**{member}** banni pour **{duree_lisible}**.", color=COLORS['error'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Durée", value=duree_lisible, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
             embed.add_field(name="Débannissement le", value=f"<t:{int(unban_at.timestamp())}:F>", inline=False)
-            embed.set_footer(text=f"ID Utilisateur : {member.id}")
-            await interaction.response.send_message(embed=embed)
+            embed.set_footer(text=self._case_footer(case_id, member.id))
+            await interaction.edit_original_response(embed=embed, view=None)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de bannir ce membre !", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
 
     # ------------------------------------------------------------------
     # /unban
     # ------------------------------------------------------------------
 
     @app_commands.command(name="unban", description="Débannir un utilisateur du serveur")
-    @app_commands.describe(user_id="L'ID de l'utilisateur à débannir", raison="Raison du débannissement")
+    @app_commands.describe(user_id="L'ID de l'utilisateur à débannir", raison="Raison")
     async def unban(self, interaction: discord.Interaction, user_id: str, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de débannir des membres !", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.ban_members:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de débannir des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Vous n'avez pas la permission de débannir !", ephemeral=True)
         try:
             uid = int(user_id)
         except ValueError:
-            await interaction.response.send_message("❌ ID utilisateur invalide !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ ID invalide !", ephemeral=True)
         try:
             bans = [e async for e in interaction.guild.bans(limit=2000)]
             banned_user = next((e.user for e in bans if e.user.id == uid), None)
             if not banned_user:
-                await interaction.response.send_message("❌ Cet utilisateur n'est pas banni !", ephemeral=True)
-                return
+                return await interaction.response.send_message("❌ Cet utilisateur n'est pas banni !", ephemeral=True)
 
             await interaction.guild.unban(banned_user, reason=f"Débanni par {interaction.user} | {raison}")
             deactivate_tempban(interaction.guild.id, uid)
-            add_sanction(interaction.guild.id, uid, interaction.user.id, 'unban', raison)
+            case_id = add_sanction(interaction.guild.id, uid, interaction.user.id, 'unban', raison)
 
-            embed = discord.Embed(title="✅ Membre Débanni", description=f"**{banned_user}** a été débanni", color=COLORS['success'])
+            embed = discord.Embed(title="✅ Membre Débanni", description=f"**{banned_user}** a été débanni.", color=COLORS['success'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
-            embed.set_footer(text=f"ID Utilisateur : {banned_user.id}")
+            embed.set_footer(text=self._case_footer(case_id, uid))
             await interaction.response.send_message(embed=embed)
-        except discord.NotFound:
-            await interaction.response.send_message("❌ Utilisateur introuvable ou non banni !", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de débannir des membres !", ephemeral=True)
+            await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /mute
     # ------------------------------------------------------------------
 
     @app_commands.command(name="mute", description="Rendre muet un membre")
-    @app_commands.describe(member="Le membre à rendre muet", duree="Durée optionnelle (ex: 10m, 2h, 1d)", raison="Raison du mute")
+    @app_commands.describe(member="Le membre à rendre muet", duree="Durée optionnelle (ex: 10m, 2h)", raison="Raison")
     async def mute(self, interaction: discord.Interaction, member: discord.Member, duree: str = None, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de rendre muet des membres !", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de gérer les rôles !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
         if member.top_role >= interaction.user.top_role and interaction.user != interaction.guild.owner:
-            await interaction.response.send_message("❌ Vous ne pouvez pas rendre muet quelqu'un avec un rôle supérieur ou égal !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Rôle supérieur ou égal — action impossible !", ephemeral=True)
 
         seconds = None
         unmute_at = None
         duree_lisible = "Permanent"
-
         if duree:
             seconds = parse_duration(duree)
             if seconds is None:
-                await interaction.response.send_message("❌ Format de durée invalide ! Exemples valides : `10m`, `2h`, `1d`, `30s`", ephemeral=True)
-                return
+                return await interaction.response.send_message("❌ Format invalide. Exemples : `10m`, `2h`, `1d`", ephemeral=True)
             unmute_at = datetime.utcnow() + timedelta(seconds=seconds)
             duree_lisible = format_duration(seconds)
 
         try:
             mute_role = await ensure_mute_role(interaction.guild)
             if mute_role in member.roles:
-                await interaction.response.send_message("❌ Ce membre est déjà muet !", ephemeral=True)
-                return
+                return await interaction.response.send_message("❌ Ce membre est déjà muet !", ephemeral=True)
 
-            await member.add_roles(mute_role, reason=f"Rendu muet par {interaction.user} | {raison}")
+            await member.add_roles(mute_role, reason=f"Mute par {interaction.user} | {raison}")
             add_mute(interaction.guild.id, member.id, interaction.user.id, raison, unmute_at)
-            add_sanction(interaction.guild.id, member.id, interaction.user.id, 'mute', raison, duree)
+            case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'mute', raison, duree)
 
-            embed = discord.Embed(title="🔇 Membre Rendu Muet", description=f"**{member}** a été rendu muet", color=COLORS['warning'])
+            embed = discord.Embed(title="🔇 Membre Rendu Muet", description=f"**{member}** est maintenant muet.", color=COLORS['warning'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Durée", value=duree_lisible, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
             if unmute_at:
                 embed.add_field(name="Unmute le", value=f"<t:{int(unmute_at.timestamp())}:F>", inline=False)
-            embed.set_footer(text=f"ID Utilisateur : {member.id}")
+            embed.set_footer(text=self._case_footer(case_id, member.id))
             await interaction.response.send_message(embed=embed)
 
-            # Schedule auto-unmute via asyncio task if duration provided
             if seconds:
-                async def _auto_unmute():
+                async def _unmute():
                     await asyncio.sleep(seconds)
                     try:
                         if mute_role in member.roles:
@@ -309,131 +311,120 @@ class Moderation(commands.Cog):
                         remove_mute(interaction.guild.id, member.id)
                     except (discord.Forbidden, discord.NotFound):
                         pass
-                self.bot.loop.create_task(_auto_unmute())
-
+                self.bot.loop.create_task(_unmute())
         except discord.Forbidden:
             if not interaction.response.is_done():
-                await interaction.response.send_message("❌ Je n'ai pas la permission de rendre muet ce membre !", ephemeral=True)
-        except Exception as e:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+                await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /unmute
     # ------------------------------------------------------------------
 
     @app_commands.command(name="unmute", description="Retirer le mute d'un membre")
-    @app_commands.describe(member="Le membre à unmute", raison="Raison de l'unmute")
+    @app_commands.describe(member="Le membre à unmute", raison="Raison")
     async def unmute(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de retirer le mute des membres !", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de gérer les rôles !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
         try:
             mute_role = await ensure_mute_role(interaction.guild)
             if mute_role not in member.roles:
-                await interaction.response.send_message("❌ Ce membre n'est pas muet !", ephemeral=True)
-                return
+                return await interaction.response.send_message("❌ Ce membre n'est pas muet !", ephemeral=True)
+
             await member.remove_roles(mute_role, reason=f"Unmute par {interaction.user} | {raison}")
             remove_mute(interaction.guild.id, member.id)
-            add_sanction(interaction.guild.id, member.id, interaction.user.id, 'unmute', raison)
+            case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'unmute', raison)
 
-            embed = discord.Embed(title="🔊 Membre Unmute", description=f"**{member}** n'est plus muet", color=COLORS['success'])
+            embed = discord.Embed(title="🔊 Membre Unmute", description=f"**{member}** n'est plus muet.", color=COLORS['success'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             embed.add_field(name="Raison", value=raison, inline=True)
-            embed.set_footer(text=f"ID Utilisateur : {member.id}")
+            embed.set_footer(text=self._case_footer(case_id, member.id))
             await interaction.response.send_message(embed=embed)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de retirer le mute de ce membre !", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /warn
     # ------------------------------------------------------------------
 
     @app_commands.command(name="warn", description="Avertir un membre")
-    @app_commands.describe(member="Le membre à avertir", raison="Raison de l'avertissement")
+    @app_commands.describe(member="Le membre à avertir", raison="Raison")
     async def warn(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie"):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission d'avertir des membres !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
 
         add_warning(interaction.guild.id, member.id, interaction.user.id, raison)
-        add_sanction(interaction.guild.id, member.id, interaction.user.id, 'warn', raison)
+        case_id = add_sanction(interaction.guild.id, member.id, interaction.user.id, 'warn', raison)
         warnings = get_warnings(interaction.guild.id, member.id)
-        warning_count = len(warnings)
+        count = len(warnings)
 
-        embed = discord.Embed(title="⚠️ Membre Averti", description=f"**{member}** a été averti", color=COLORS['warning'])
+        embed = discord.Embed(title="⚠️ Membre Averti", description=f"**{member}** a été averti.", color=COLORS['warning'])
         embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
         embed.add_field(name="Raison", value=raison, inline=True)
-        embed.add_field(name="Total Avertissements", value=f"{warning_count}/{MAX_WARNINGS}", inline=True)
-        embed.set_footer(text=f"ID Utilisateur : {member.id}")
+        embed.add_field(name="Total", value=f"{count}/{MAX_WARNINGS}", inline=True)
+        embed.set_footer(text=self._case_footer(case_id, member.id))
 
-        if warning_count >= MAX_WARNINGS:
+        if count >= MAX_WARNINGS:
             try:
                 mute_role = await ensure_mute_role(interaction.guild)
                 if mute_role not in member.roles:
-                    await member.add_roles(mute_role, reason="Auto-mute : Nombre maximum d'avertissements atteint")
-                    embed.add_field(name="Action Automatique", value="🔇 Auto-mute pour avoir atteint le maximum d'avertissements", inline=False)
+                    await member.add_roles(mute_role, reason="Auto-mute : max avertissements atteint")
+                    embed.add_field(name="Action Automatique", value="🔇 Auto-mute déclenché", inline=False)
             except discord.Forbidden:
                 pass
 
         await interaction.response.send_message(embed=embed)
-
-        try:
-            dm = discord.Embed(title="Vous avez été averti", description=f"Vous avez reçu un avertissement dans **{interaction.guild.name}**", color=COLORS['warning'])
-            dm.add_field(name="Raison", value=raison, inline=False)
-            dm.add_field(name="Avertissements", value=f"{warning_count}/{MAX_WARNINGS}", inline=False)
-            await member.send(embed=dm)
-        except discord.Forbidden:
-            pass
+        await self._send_dm(member, discord.Embed(
+            title="Vous avez été averti",
+            description=f"Avertissement dans **{interaction.guild.name}**",
+            color=COLORS['warning']
+        ).add_field(name="Raison", value=raison).add_field(name="Avertissements", value=f"{count}/{MAX_WARNINGS}"))
 
     # ------------------------------------------------------------------
     # /warnings
     # ------------------------------------------------------------------
 
     @app_commands.command(name="warnings", description="Voir les avertissements d'un membre")
-    @app_commands.describe(member="Le membre dont voir les avertissements")
+    @app_commands.describe(member="Le membre concerné")
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
-        warnings = get_warnings(interaction.guild.id, member.id)
+        warns = get_warnings(interaction.guild.id, member.id)
+        if not warns:
+            embed = discord.Embed(title="✅ Aucun Avertissement", description=f"**{member}** n'a aucun avertissement.", color=COLORS['success'])
+            embed.set_footer(text=f"ID : {member.id}")
+            return await interaction.response.send_message(embed=embed)
 
-        if not warnings:
-            embed = discord.Embed(title="✅ Aucun Avertissement", description=f"**{member}** n'a aucun avertissement", color=COLORS['success'])
-        else:
-            embed = discord.Embed(title=f"⚠️ Avertissements de {member}", description=f"Total : {len(warnings)} avertissement(s)", color=COLORS['warning'])
-            for i, w in enumerate(warnings[:10], 1):
-                moderator = interaction.guild.get_member(w[1])
-                mod_name = moderator.mention if moderator else f"<@{w[1]}>"
-                embed.add_field(name=f"Avertissement #{i}", value=f"**Raison :** {w[2]}\n**Modérateur :** {mod_name}\n**Date :** {w[3]}", inline=False)
+        def fmt(i, w):
+            mod = interaction.guild.get_member(w[1])
+            mod_str = mod.mention if mod else f"<@{w[1]}>"
+            return f"Avertissement #{i}", f"**Raison :** {w[2]}\n**Modérateur :** {mod_str}\n**Date :** {w[3]}"
 
-        embed.set_footer(text=f"ID Utilisateur : {member.id}")
-        await interaction.response.send_message(embed=embed)
+        pages = build_pages(warns, f"⚠️ Avertissements de {member}", COLORS['warning'], per_page=5, entry_formatter=fmt)
+        for p in pages:
+            p.description = f"Total : **{len(warns)}** avertissement(s)"
+            p.set_footer(text=f"ID : {member.id} • Page {{page}}/{len(pages)}")
+
+        if len(pages) == 1:
+            return await interaction.response.send_message(embed=pages[0])
+
+        view = PaginationView(pages, author_id=interaction.user.id)
+        await interaction.response.send_message(embed=pages[0], view=view)
+        view.message = await interaction.original_response()
 
     # ------------------------------------------------------------------
     # /clearwarnings
     # ------------------------------------------------------------------
 
     @app_commands.command(name="clearwarnings", description="Effacer tous les avertissements d'un membre")
-    @app_commands.describe(member="Le membre dont effacer les avertissements")
+    @app_commands.describe(member="Le membre concerné")
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission d'effacer les avertissements !", ephemeral=True)
-            return
-
-        warnings = get_warnings(interaction.guild.id, member.id)
-        if not warnings:
-            await interaction.response.send_message(f"❌ **{member}** n'a aucun avertissement à effacer !", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+        warns = get_warnings(interaction.guild.id, member.id)
+        if not warns:
+            return await interaction.response.send_message(f"❌ **{member}** n'a aucun avertissement.", ephemeral=True)
         clear_warnings(interaction.guild.id, member.id)
-
-        embed = discord.Embed(title="✅ Avertissements Effacés", description=f"Tous les avertissements de **{member}** ont été effacés", color=COLORS['success'])
-        embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Avertissements Effacés", value=str(len(warnings)), inline=True)
-        embed.set_footer(text=f"ID Utilisateur : {member.id}")
+        embed = discord.Embed(title="✅ Avertissements Effacés", description=f"**{len(warns)}** avertissement(s) effacé(s) pour **{member}**.", color=COLORS['success'])
+        embed.add_field(name="Modérateur", value=interaction.user.mention)
+        embed.set_footer(text=f"ID : {member.id}")
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -441,89 +432,74 @@ class Moderation(commands.Cog):
     # ------------------------------------------------------------------
 
     @app_commands.command(name="purge", description="Supprimer plusieurs messages d'un coup")
-    @app_commands.describe(nombre="Nombre de messages à supprimer (1-100)", membre="Ne supprimer que les messages de ce membre")
+    @app_commands.describe(nombre="Nombre de messages (1-100)", membre="Ne supprimer que les messages de ce membre")
     async def purge(self, interaction: discord.Interaction, nombre: int, membre: discord.Member = None):
+        # Defer en premier — les vérifications viennent ensuite via followup
+        await interaction.response.defer(ephemeral=True)
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de gérer les messages !", ephemeral=True)
-            return
-        if not interaction.guild.me.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Je n'ai pas la permission de gérer les messages !", ephemeral=True)
-            return
-        if nombre < 1 or nombre > 100:
-            await interaction.response.send_message("❌ Le nombre doit être entre 1 et 100 !", ephemeral=True)
-            return
-
-        await interaction.response.defer()
+            return await interaction.followup.send("❌ Permission insuffisante !", ephemeral=True)
+        if not 1 <= nombre <= 100:
+            return await interaction.followup.send("❌ Le nombre doit être entre 1 et 100 !", ephemeral=True)
         try:
-            if membre:
-                deleted = await interaction.channel.purge(limit=nombre, check=lambda m: m.author == membre)
-            else:
-                deleted = await interaction.channel.purge(limit=nombre)
-
-            embed = discord.Embed(title="🗑️ Messages Supprimés", description=f"**{len(deleted)}** message(s) supprimé(s)", color=COLORS['success'])
+            check = (lambda m: m.author == membre) if membre else None
+            deleted = await interaction.channel.purge(limit=nombre, check=check)
+            embed = discord.Embed(title="🗑️ Messages Supprimés", description=f"**{len(deleted)}** message(s) supprimé(s).", color=COLORS['success'])
             embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
             if membre:
-                embed.add_field(name="Membre Ciblé", value=membre.mention, inline=True)
+                embed.add_field(name="Membre ciblé", value=membre.mention, inline=True)
             embed.add_field(name="Salon", value=interaction.channel.mention, inline=True)
             await interaction.followup.send(embed=embed, ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send("❌ Je n'ai pas la permission de supprimer des messages !", ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Une erreur s'est produite : {e}", ephemeral=True)
+            await interaction.followup.send("❌ Permission refusée !", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /slowmode
     # ------------------------------------------------------------------
 
     @app_commands.command(name="slowmode", description="Activer ou désactiver le mode lent sur un salon")
-    @app_commands.describe(secondes="Délai en secondes (0 pour désactiver, max 21600)", salon="Salon concerné (défaut : salon actuel)")
+    @app_commands.describe(secondes="Délai en secondes (0 = désactiver, max 21600)", salon="Salon (défaut : actuel)")
     async def slowmode(self, interaction: discord.Interaction, secondes: int = 0, salon: discord.TextChannel = None):
         if not interaction.user.guild_permissions.manage_channels:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de gérer les salons !", ephemeral=True)
-            return
-        if secondes < 0 or secondes > 21600:
-            await interaction.response.send_message("❌ La valeur doit être entre 0 et 21600 secondes (6 heures) !", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+        if not 0 <= secondes <= 21600:
+            return await interaction.response.send_message("❌ Valeur entre 0 et 21600 secondes.", ephemeral=True)
         target = salon or interaction.channel
         await target.edit(slowmode_delay=secondes)
-
         if secondes == 0:
-            embed = discord.Embed(title="✅ Mode Lent Désactivé", description=f"Le mode lent a été désactivé dans {target.mention}", color=COLORS['success'])
+            embed = discord.Embed(title="✅ Mode Lent Désactivé", description=f"Mode lent désactivé dans {target.mention}.", color=COLORS['success'])
         else:
-            embed = discord.Embed(title="🐢 Mode Lent Activé", description=f"Le mode lent a été activé dans {target.mention}", color=COLORS['info'])
-            embed.add_field(name="Délai", value=format_duration(secondes), inline=True)
-
-        embed.add_field(name="Modérateur", value=interaction.user.mention, inline=True)
+            embed = discord.Embed(title="🐢 Mode Lent Activé", description=f"Mode lent activé dans {target.mention}.", color=COLORS['info'])
+            embed.add_field(name="Délai", value=format_duration(secondes))
+        embed.add_field(name="Modérateur", value=interaction.user.mention)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
     # /userinfo
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="userinfo", description="Afficher les informations complètes d'un membre")
+    @app_commands.command(name="userinfo", description="Informations complètes sur un membre")
     @app_commands.describe(member="Le membre à inspecter (défaut : vous-même)")
     async def userinfo(self, interaction: discord.Interaction, member: discord.Member = None):
         member = member or interaction.user
         sanctions = get_sanctions(interaction.guild.id, member.id)
+        pts = get_violation_points(interaction.guild.id, member.id)
 
         roles = [r.mention for r in reversed(member.roles) if r != interaction.guild.default_role]
-        roles_str = " ".join(roles[:10]) if roles else "Aucun rôle"
-        if len(member.roles) - 1 > 10:
-            roles_str += f" *+{len(member.roles) - 11} autres*"
+        roles_str = " ".join(roles[:10]) + (f" *+{len(roles) - 10} autres*" if len(roles) > 10 else "") if roles else "Aucun rôle"
 
-        embed = discord.Embed(title=f"👤 Informations sur {member}", color=member.color if member.color.value else COLORS['info'])
+        embed = discord.Embed(title=f"👤 Profil de {member}", color=member.color if member.color.value else COLORS['info'])
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name="Nom d'utilisateur", value=str(member), inline=True)
         embed.add_field(name="Pseudonyme", value=member.display_name, inline=True)
         embed.add_field(name="ID", value=str(member.id), inline=True)
         embed.add_field(name="Compte créé le", value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
-        embed.add_field(name="Rejoint le serveur", value=f"<t:{int(member.joined_at.timestamp())}:D>" if member.joined_at else "Inconnu", inline=True)
+        embed.add_field(name="Rejoint le", value=f"<t:{int(member.joined_at.timestamp())}:D>" if member.joined_at else "Inconnu", inline=True)
         embed.add_field(name="Bot", value="Oui" if member.bot else "Non", inline=True)
         embed.add_field(name=f"Rôles ({len(member.roles) - 1})", value=roles_str, inline=False)
         embed.add_field(name="Sanctions enregistrées", value=str(len(sanctions)), inline=True)
+        embed.add_field(name="Points auto-mod", value=str(pts), inline=True)
         if member.premium_since:
-            embed.add_field(name="Booste depuis", value=f"<t:{int(member.premium_since.timestamp())}:D>", inline=True)
+            embed.add_field(name="Boost depuis", value=f"<t:{int(member.premium_since.timestamp())}:D>", inline=True)
         embed.set_footer(text=f"ID : {member.id}")
         await interaction.response.send_message(embed=embed)
 
@@ -531,57 +507,107 @@ class Moderation(commands.Cog):
     # /serverinfo
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="serverinfo", description="Afficher les informations du serveur")
+    @app_commands.command(name="serverinfo", description="Informations sur le serveur")
     async def serverinfo(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        embed = discord.Embed(title=f"🏠 Informations sur {guild.name}", color=COLORS['info'])
-        if guild.icon:
-            embed.set_thumbnail(url=guild.icon.url)
-        embed.add_field(name="Propriétaire", value=guild.owner.mention if guild.owner else "Inconnu", inline=True)
-        embed.add_field(name="ID", value=str(guild.id), inline=True)
-        embed.add_field(name="Créé le", value=f"<t:{int(guild.created_at.timestamp())}:D>", inline=True)
-        embed.add_field(name="Membres", value=str(guild.member_count), inline=True)
-        embed.add_field(name="Salons", value=str(len(guild.channels)), inline=True)
-        embed.add_field(name="Rôles", value=str(len(guild.roles)), inline=True)
-        embed.add_field(name="Boosts", value=str(guild.premium_subscription_count), inline=True)
-        embed.add_field(name="Niveau de boost", value=str(guild.premium_tier), inline=True)
-        embed.add_field(name="Vérification", value=str(guild.verification_level).capitalize(), inline=True)
+        g = interaction.guild
+        embed = discord.Embed(title=f"🏠 {g.name}", color=COLORS['info'])
+        if g.icon:
+            embed.set_thumbnail(url=g.icon.url)
+        embed.add_field(name="Propriétaire", value=g.owner.mention if g.owner else "Inconnu", inline=True)
+        embed.add_field(name="ID", value=str(g.id), inline=True)
+        embed.add_field(name="Créé le", value=f"<t:{int(g.created_at.timestamp())}:D>", inline=True)
+        embed.add_field(name="Membres", value=str(g.member_count), inline=True)
+        embed.add_field(name="Salons", value=str(len(g.channels)), inline=True)
+        embed.add_field(name="Rôles", value=str(len(g.roles)), inline=True)
+        embed.add_field(name="Boosts", value=str(g.premium_subscription_count), inline=True)
+        embed.add_field(name="Niveau de boost", value=str(g.premium_tier), inline=True)
+        embed.add_field(name="Vérification", value=str(g.verification_level).capitalize(), inline=True)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
     # /historique
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="historique", description="Voir l'historique des sanctions d'un membre")
-    @app_commands.describe(member="Le membre dont voir l'historique")
+    @app_commands.command(name="historique", description="Historique des sanctions d'un membre")
+    @app_commands.describe(member="Le membre concerné")
     async def historique(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de consulter l'historique des sanctions !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
 
         sanctions = get_sanctions(interaction.guild.id, member.id)
-
         if not sanctions:
-            embed = discord.Embed(title="✅ Aucune Sanction", description=f"**{member}** n'a aucune sanction enregistrée", color=COLORS['success'])
-        else:
-            action_emojis = {
-                'kick': '👢', 'ban': '🔨', 'tempban': '⏱️',
-                'mute': '🔇', 'unmute': '🔊', 'warn': '⚠️', 'unban': '✅'
-            }
-            embed = discord.Embed(title=f"📋 Historique de {member}", description=f"Total : {len(sanctions)} sanction(s)", color=COLORS['warning'])
-            for i, (action, mod_id, reason, duration, timestamp) in enumerate(sanctions[:15], 1):
-                emoji = action_emojis.get(action, '🔹')
-                mod = interaction.guild.get_member(mod_id)
-                mod_name = mod.mention if mod else f"<@{mod_id}>"
-                dur_str = f" ({duration})" if duration else ""
-                embed.add_field(
-                    name=f"{emoji} {action.capitalize()}{dur_str} — #{i}",
-                    value=f"**Raison :** {reason or 'Aucune'}\n**Modérateur :** {mod_name}\n**Date :** {timestamp}",
-                    inline=False
-                )
+            embed = discord.Embed(title="✅ Aucune Sanction", description=f"**{member}** n'a aucune sanction.", color=COLORS['success'])
+            embed.set_footer(text=f"ID : {member.id}")
+            return await interaction.response.send_message(embed=embed)
 
-        embed.set_footer(text=f"ID Utilisateur : {member.id}")
+        def fmt(i, s):
+            case_id, action, mod_id, reason, duration, timestamp = s
+            emoji = ACTION_EMOJIS.get(action, '🔹')
+            mod = interaction.guild.get_member(mod_id)
+            mod_str = mod.mention if mod else f"<@{mod_id}>"
+            dur = f" ({duration})" if duration else ""
+            return (
+                f"{emoji} Case #{case_id} — {action.capitalize()}{dur}",
+                f"**Raison :** {reason or 'Aucune'}\n**Modérateur :** {mod_str}\n**Date :** {timestamp}"
+            )
+
+        pages = build_pages(sanctions, f"📋 Historique de {member}", COLORS['warning'], per_page=5, entry_formatter=fmt)
+        for p in pages:
+            p.description = f"Total : **{len(sanctions)}** sanction(s)"
+            p.set_thumbnail(url=member.display_avatar.url)
+
+        if len(pages) == 1:
+            return await interaction.response.send_message(embed=pages[0])
+
+        view = PaginationView(pages, author_id=interaction.user.id)
+        await interaction.response.send_message(embed=pages[0], view=view)
+        view.message = await interaction.original_response()
+
+    # ------------------------------------------------------------------
+    # /case + /editcase
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="case", description="Consulter un case de modération")
+    @app_commands.describe(numero="Numéro du case")
+    async def case(self, interaction: discord.Interaction, numero: int):
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+
+        row = get_case(interaction.guild.id, numero)
+        if not row:
+            return await interaction.response.send_message(f"❌ Case #{numero} introuvable.", ephemeral=True)
+
+        case_id, user_id, mod_id, action, reason, duration, timestamp = row
+        emoji = ACTION_EMOJIS.get(action, '🔹')
+        mod = interaction.guild.get_member(mod_id)
+        user = interaction.guild.get_member(user_id)
+
+        embed = discord.Embed(
+            title=f"{emoji} Case #{case_id} — {action.capitalize()}",
+            color=COLORS['warning']
+        )
+        embed.add_field(name="Membre", value=user.mention if user else f"<@{user_id}>", inline=True)
+        embed.add_field(name="Modérateur", value=mod.mention if mod else f"<@{mod_id}>", inline=True)
+        if duration:
+            embed.add_field(name="Durée", value=duration, inline=True)
+        embed.add_field(name="Raison", value=reason or "Aucune", inline=False)
+        embed.add_field(name="Date", value=timestamp, inline=False)
+        embed.set_footer(text=f"Case #{case_id} • Utilisez /editcase {case_id} pour modifier la raison")
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="editcase", description="Modifier la raison d'un case")
+    @app_commands.describe(numero="Numéro du case", nouvelle_raison="Nouvelle raison")
+    async def editcase(self, interaction: discord.Interaction, numero: int, nouvelle_raison: str):
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+
+        if edit_case_reason(interaction.guild.id, numero, nouvelle_raison):
+            embed = discord.Embed(title="✅ Case Modifié", description=f"La raison du case **#{numero}** a été mise à jour.", color=COLORS['success'])
+            embed.add_field(name="Nouvelle raison", value=nouvelle_raison)
+            embed.add_field(name="Modifié par", value=interaction.user.mention)
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(f"❌ Case #{numero} introuvable.", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /regles + /setregles
@@ -591,26 +617,20 @@ class Moderation(commands.Cog):
     async def regles(self, interaction: discord.Interaction):
         settings = get_guild_settings(interaction.guild.id)
         rules_text = settings[4] if settings else None
-
         if not rules_text:
-            await interaction.response.send_message("❌ Aucune règle définie. Un administrateur peut les configurer avec `/setregles`.", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("❌ Aucune règle définie. Un administrateur peut les configurer avec `/setregles`.", ephemeral=True)
         embed = discord.Embed(title=f"📜 Règles de {interaction.guild.name}", description=rules_text, color=COLORS['info'])
         embed.set_footer(text="Merci de respecter ces règles !")
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="setregles", description="Définir les règles du serveur")
-    @app_commands.describe(texte="Le texte des règles (supporte le markdown)")
+    @app_commands.describe(texte="Texte des règles (markdown supporté)")
     async def setregles(self, interaction: discord.Interaction, texte: str):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Vous devez être administrateur pour définir les règles !", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
         update_guild_settings(interaction.guild.id, rules_text=texte)
-
-        embed = discord.Embed(title="✅ Règles Mises à Jour", description="Les règles du serveur ont été mises à jour.", color=COLORS['success'])
-        embed.add_field(name="Aperçu", value=texte[:500] + ("..." if len(texte) > 500 else ""), inline=False)
+        embed = discord.Embed(title="✅ Règles Mises à Jour", color=COLORS['success'])
+        embed.add_field(name="Aperçu", value=texte[:500] + ("..." if len(texte) > 500 else ""))
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -623,18 +643,22 @@ class Moderation(commands.Cog):
     @app_commands.describe(mot="Le mot à interdire")
     async def blacklist_add(self, interaction: discord.Interaction, mot: str):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Vous devez être administrateur pour gérer la liste noire !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
         add_blacklist_word(interaction.guild.id, mot, interaction.user.id)
+        automod = self.bot.get_cog('AutoMod')
+        if automod:
+            automod.invalidate_cache(interaction.guild.id)
         await interaction.response.send_message(f"✅ Le mot **{mot}** a été ajouté à la liste noire.", ephemeral=True)
 
     @blacklist_group.command(name="retirer", description="Retirer un mot de la liste noire")
     @app_commands.describe(mot="Le mot à retirer")
     async def blacklist_remove(self, interaction: discord.Interaction, mot: str):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Vous devez être administrateur pour gérer la liste noire !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
         if remove_blacklist_word(interaction.guild.id, mot):
+            automod = self.bot.get_cog('AutoMod')
+            if automod:
+                automod.invalidate_cache(interaction.guild.id)
             await interaction.response.send_message(f"✅ Le mot **{mot}** a été retiré de la liste noire.", ephemeral=True)
         else:
             await interaction.response.send_message(f"❌ Le mot **{mot}** n'est pas dans la liste noire.", ephemeral=True)
@@ -642,34 +666,87 @@ class Moderation(commands.Cog):
     @blacklist_group.command(name="liste", description="Voir les mots de la liste noire")
     async def blacklist_list(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.manage_messages:
-            await interaction.response.send_message("❌ Vous n'avez pas la permission de consulter la liste noire !", ephemeral=True)
-            return
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
         words = get_blacklist_words(interaction.guild.id)
         if not words:
-            await interaction.response.send_message("✅ La liste noire est vide.", ephemeral=True)
-            return
-        embed = discord.Embed(title="🚫 Liste Noire de Mots", description="\n".join(f"• {w}" for w in words), color=COLORS['error'])
+            return await interaction.response.send_message("✅ La liste noire est vide.", ephemeral=True)
+        embed = discord.Embed(title="🚫 Liste Noire", description="\n".join(f"• `{w}`" for w in words), color=COLORS['error'])
         embed.set_footer(text=f"{len(words)} mot(s) interdit(s)")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # /automod
+    # ------------------------------------------------------------------
+
+    automod_group = app_commands.Group(name="automod", description="Configuration de l'auto-modération")
+
+    @automod_group.command(name="config", description="Voir la configuration de l'auto-modération")
+    async def automod_config(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+
+        cfg = get_automod_config(interaction.guild.id)
+        embed = discord.Embed(title="⚙️ Configuration Auto-Modération", color=COLORS['info'])
+        embed.add_field(name="🔍 Détection spam", value=f"Seuil : **{cfg['spam_threshold']}** msgs / **{cfg['spam_interval']}**s", inline=True)
+        embed.add_field(name="📢 Mentions max", value=f"**{cfg['max_mentions']}** mentions", inline=True)
+        embed.add_field(name="🔠 Majuscules", value=f"{'✅ Actif' if cfg['caps_detection'] else '❌ Inactif'} — **{cfg['caps_percent']}**% min **{cfg['caps_min_length']}** lettres", inline=True)
+        embed.add_field(name="📎 Flood de fichiers", value=f"**{cfg['file_flood_limit']}** fichiers / **{cfg['file_flood_interval']}**s", inline=True)
+        embed.add_field(name="⚠️ Seuils de sanction", value=(
+            f"Avertissement : **{cfg['pts_warn']}** pts\n"
+            f"Mute ({format_duration(cfg['pts_mute_duration'])}) : **{cfg['pts_mute']}** pts\n"
+            f"Expulsion : **{cfg['pts_kick']}** pts\n"
+            f"Tempban ({format_duration(cfg['pts_ban_duration'])}) : **{cfg['pts_ban']}** pts"
+        ), inline=False)
+        embed.set_footer(text="Utilisez /automod set <paramètre> <valeur> pour modifier")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @automod_group.command(name="set", description="Modifier un paramètre de l'auto-modération")
+    @app_commands.describe(
+        parametre="Paramètre à modifier",
+        valeur="Nouvelle valeur (nombre entier)"
+    )
+    @app_commands.choices(parametre=[
+        app_commands.Choice(name="Seuil spam (messages)", value="spam_threshold"),
+        app_commands.Choice(name="Intervalle spam (secondes)", value="spam_interval"),
+        app_commands.Choice(name="Mentions max", value="max_mentions"),
+        app_commands.Choice(name="Détection majuscules (0/1)", value="caps_detection"),
+        app_commands.Choice(name="Seuil majuscules (%)", value="caps_percent"),
+        app_commands.Choice(name="Limite fichiers flood", value="file_flood_limit"),
+        app_commands.Choice(name="Points → avertissement", value="pts_warn"),
+        app_commands.Choice(name="Points → mute", value="pts_mute"),
+        app_commands.Choice(name="Durée mute auto (secondes)", value="pts_mute_duration"),
+        app_commands.Choice(name="Points → expulsion", value="pts_kick"),
+        app_commands.Choice(name="Points → tempban", value="pts_ban"),
+        app_commands.Choice(name="Durée tempban auto (secondes)", value="pts_ban_duration"),
+    ])
+    async def automod_set(self, interaction: discord.Interaction, parametre: str, valeur: int):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
+        update_automod_config(interaction.guild.id, **{parametre: valeur})
+        await interaction.response.send_message(f"✅ `{parametre}` mis à jour → **{valeur}**", ephemeral=True)
+
+    @automod_group.command(name="resetpoints", description="Réinitialiser les points d'infraction d'un membre")
+    @app_commands.describe(member="Le membre concerné")
+    async def automod_reset(self, interaction: discord.Interaction, member: discord.Member):
+        if not interaction.user.guild_permissions.manage_messages:
+            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
+        reset_violation_points(interaction.guild.id, member.id)
+        await interaction.response.send_message(f"✅ Points d'infraction de **{member}** réinitialisés.", ephemeral=True)
 
     # ------------------------------------------------------------------
     # /setwelcome
     # ------------------------------------------------------------------
 
     @app_commands.command(name="setwelcome", description="Configurer le message de bienvenue")
-    @app_commands.describe(salon="Le salon de bienvenue", message="Message personnalisé (utilisez {mention} et {server})")
+    @app_commands.describe(salon="Salon de bienvenue", message="Message ({mention}, {server}, {count})")
     async def setwelcome(self, interaction: discord.Interaction, salon: discord.TextChannel, message: str = None):
         if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Vous devez être administrateur pour configurer le message de bienvenue !", ephemeral=True)
-            return
-
+            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
         update_guild_settings(interaction.guild.id, welcome_channel_id=salon.id, welcome_message=message)
-
         embed = discord.Embed(title="✅ Message de Bienvenue Configuré", color=COLORS['success'])
-        embed.add_field(name="Salon", value=salon.mention, inline=True)
-        default_msg = "Bienvenue sur **{server}**, {mention} ! 🎉"
-        embed.add_field(name="Message", value=message or f"*(Par défaut)* {default_msg}", inline=False)
-        embed.add_field(name="Variables disponibles", value="`{mention}` → mention du membre\n`{server}` → nom du serveur\n`{count}` → nombre de membres", inline=False)
+        embed.add_field(name="Salon", value=salon.mention)
+        embed.add_field(name="Message", value=message or "*(Par défaut)* Bienvenue sur **{server}**, {mention} ! 🎉")
+        embed.add_field(name="Variables", value="`{mention}` `{server}` `{count}`", inline=False)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -679,48 +756,31 @@ class Moderation(commands.Cog):
     @app_commands.command(name="modhelp", description="Afficher toutes les commandes de modération")
     async def modhelp(self, interaction: discord.Interaction):
         embed = discord.Embed(title="🛡️ Commandes de Modération", color=COLORS['info'])
-
-        embed.add_field(name="⚔️ Modération de Base", value=(
-            "`/kick` — Expulser un membre\n"
-            "`/ban` — Bannir un membre\n"
-            "`/tempban` — Bannissement temporaire (ex: `1h`, `2d`)\n"
-            "`/unban` — Débannir via ID\n"
-            "`/mute` — Rendre muet (optionnel : durée)\n"
-            "`/unmute` — Retirer le mute"
+        embed.add_field(name="⚔️ Sanctions", value=(
+            "`/kick` — Expulser\n`/ban` — Bannir\n`/tempban` — Bannissement temporaire\n"
+            "`/unban` — Débannir\n`/mute [durée]` — Rendre muet\n`/unmute` — Retirer le mute"
         ), inline=False)
-
-        embed.add_field(name="⚠️ Système d'Avertissements", value=(
-            "`/warn` — Avertir un membre\n"
-            "`/warnings` — Voir les avertissements\n"
-            "`/clearwarnings` — Effacer les avertissements"
+        embed.add_field(name="⚠️ Avertissements", value=(
+            "`/warn` — Avertir\n`/warnings` — Voir les avertissements\n`/clearwarnings` — Effacer"
         ), inline=False)
-
-        embed.add_field(name="🔧 Gestion des Messages", value=(
-            "`/purge` — Supprimer jusqu'à 100 messages\n"
-            "`/slowmode` — Mode lent sur un salon"
+        embed.add_field(name="📋 Cases", value=(
+            "`/case <numéro>` — Consulter un case\n`/editcase <numéro> <raison>` — Modifier la raison"
         ), inline=False)
-
-        embed.add_field(name="📊 Informations", value=(
-            "`/userinfo` — Infos complètes sur un membre\n"
-            "`/serverinfo` — Infos sur le serveur\n"
-            "`/historique` — Historique des sanctions\n"
-            "`/regles` — Afficher les règles"
+        embed.add_field(name="🔧 Messages", value=(
+            "`/purge` — Supprimer des messages\n`/slowmode` — Mode lent"
         ), inline=False)
-
-        embed.add_field(name="⚙️ Configuration (Admin)", value=(
-            "`/setlogchannel` — Définir le salon de logs\n"
-            "`/setregles` — Définir les règles\n"
-            "`/setwelcome` — Message de bienvenue\n"
-            "`/blacklist ajouter/retirer/liste` — Gérer la liste noire"
+        embed.add_field(name="📊 Infos", value=(
+            "`/userinfo` — Profil d'un membre\n`/serverinfo` — Infos du serveur\n"
+            "`/historique` — Historique des sanctions\n`/regles` — Règles du serveur"
         ), inline=False)
-
-        embed.add_field(name="ℹ️ Notes", value=(
-            "• La plupart des commandes requièrent les permissions appropriées\n"
-            "• Le bot respecte la hiérarchie des rôles\n"
-            "• L'auto-modération fonctionne en arrière-plan\n"
-            "• Formats de durée : `30s`, `10m`, `2h`, `1d`"
+        embed.add_field(name="⚙️ Config (Admin)", value=(
+            "`/setlogchannel` — Salon de logs\n`/setregles` — Règles\n`/setwelcome` — Bienvenue\n"
+            "`/blacklist ajouter/retirer/liste` — Liste noire\n"
+            "`/automod config` — Voir la config auto-mod\n"
+            "`/automod set` — Modifier un paramètre\n"
+            "`/automod resetpoints` — Réinitialiser les points d'un membre"
         ), inline=False)
-
+        embed.set_footer(text="Formats de durée acceptés : 30s • 10m • 2h • 1d")
         await interaction.response.send_message(embed=embed)
 
 

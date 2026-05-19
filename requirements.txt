@@ -1,0 +1,4 @@
+discord.py
+Flask
+python-dotenv
+waitress==3.0.0

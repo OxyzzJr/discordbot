@@ -11,7 +11,6 @@ MAX_WARNINGS = int(os.getenv('MAX_WARNINGS', 3))
 MUTE_ROLE_NAME = os.getenv('MUTE_ROLE_NAME', 'Muted')
 LOG_CHANNEL_NAME = os.getenv('LOG_CHANNEL_NAME', 'mod-logs')
 
-# Auto-moderation Settings
 SPAM_THRESHOLD = int(os.getenv('SPAM_THRESHOLD', 5))
 SPAM_INTERVAL = int(os.getenv('SPAM_INTERVAL', 10))
 MAX_MENTIONS = int(os.getenv('MAX_MENTIONS', 5))

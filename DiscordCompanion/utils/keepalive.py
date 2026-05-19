@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from threading import Thread
 import time
 import logging
+from waitress import serve
 
 app = Flask('')
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def health():
 
 def run():
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        serve(app, host='0.0.0.0', port=5000)
     except Exception as e:
         logger.error(f"Erreur serveur keep-alive : {e}")
 

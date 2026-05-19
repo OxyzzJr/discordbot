@@ -10,7 +10,8 @@ COPY DiscordCompanion/pyproject.toml .
 RUN pip install --no-cache-dir \
     "discord-py>=2.5.2" \
     "flask>=3.1.1" \
-    "python-dotenv>=1.1.0"
+    "python-dotenv>=1.1.0" \
+    "waitress>=3.0.0"
 
 COPY DiscordCompanion/ .
 

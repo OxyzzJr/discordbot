@@ -60,7 +60,8 @@ def init_db():
         guild_id INTEGER PRIMARY KEY,
         log_channel_id INTEGER, mute_role_id INTEGER,
         automod_enabled BOOLEAN DEFAULT 1, spam_detection BOOLEAN DEFAULT 1,
-        rules_text TEXT, welcome_channel_id INTEGER, welcome_message TEXT
+        rules_text TEXT, welcome_channel_id INTEGER, welcome_message TEXT,
+        mod_channel_id INTEGER
     )''')
 
     c.execute('''CREATE TABLE IF NOT EXISTS tempbans (
@@ -118,6 +119,7 @@ def init_db():
         ('rules_text', 'TEXT'),
         ('welcome_channel_id', 'INTEGER'),
         ('welcome_message', 'TEXT'),
+        ('mod_channel_id', 'INTEGER'),
     ]:
         try:
             c.execute(f'ALTER TABLE mutes ADD COLUMN {col} {typedef}')
@@ -391,10 +393,16 @@ def update_automod_config(guild_id: int, **kwargs):
 # Guild settings
 # ---------------------------------------------------------------------------
 
+_SETTINGS_COLS = [
+    'log_channel_id', 'mute_role_id', 'automod_enabled', 'spam_detection',
+    'rules_text', 'welcome_channel_id', 'welcome_message', 'mod_channel_id',
+]
+
+
 def get_guild_settings(guild_id: int):
     with sqlite3.connect(DATABASE_PATH) as conn:
         return conn.execute(
-            'SELECT log_channel_id, mute_role_id, automod_enabled, spam_detection, rules_text, welcome_channel_id, welcome_message FROM guild_settings WHERE guild_id=?',
+            'SELECT log_channel_id, mute_role_id, automod_enabled, spam_detection, rules_text, welcome_channel_id, welcome_message, mod_channel_id FROM guild_settings WHERE guild_id=?',
             (guild_id,)
         ).fetchone()
 
@@ -402,26 +410,26 @@ def get_guild_settings(guild_id: int):
 def update_guild_settings(guild_id: int, **kwargs):
     with sqlite3.connect(DATABASE_PATH) as conn:
         row = conn.execute(
-            'SELECT log_channel_id, mute_role_id, automod_enabled, spam_detection, rules_text, welcome_channel_id, welcome_message FROM guild_settings WHERE guild_id=?',
+            'SELECT log_channel_id, mute_role_id, automod_enabled, spam_detection, rules_text, welcome_channel_id, welcome_message, mod_channel_id FROM guild_settings WHERE guild_id=?',
             (guild_id,)
         ).fetchone()
 
-    current = dict(zip(
-        ['log_channel_id', 'mute_role_id', 'automod_enabled', 'spam_detection', 'rules_text', 'welcome_channel_id', 'welcome_message'],
-        row
-    )) if row else {
+    current = dict(zip(_SETTINGS_COLS, row)) if row else {
         'log_channel_id': None, 'mute_role_id': None,
         'automod_enabled': 1, 'spam_detection': 1,
-        'rules_text': None, 'welcome_channel_id': None, 'welcome_message': None,
+        'rules_text': None, 'welcome_channel_id': None,
+        'welcome_message': None, 'mod_channel_id': None,
     }
     current.update(kwargs)
 
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.execute(
             '''INSERT OR REPLACE INTO guild_settings
-               (guild_id, log_channel_id, mute_role_id, automod_enabled, spam_detection, rules_text, welcome_channel_id, welcome_message)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+               (guild_id, log_channel_id, mute_role_id, automod_enabled, spam_detection,
+                rules_text, welcome_channel_id, welcome_message, mod_channel_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
             (guild_id, current['log_channel_id'], current['mute_role_id'],
              current['automod_enabled'], current['spam_detection'],
-             current['rules_text'], current['welcome_channel_id'], current['welcome_message'])
+             current['rules_text'], current['welcome_channel_id'],
+             current['welcome_message'], current['mod_channel_id'])
         )

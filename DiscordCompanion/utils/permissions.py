@@ -3,28 +3,24 @@ from discord.ext import commands
 
 
 def has_mod_permissions():
-    """Vérifie si l'utilisateur a des permissions de modération."""
     def predicate(ctx):
         return ctx.author.guild_permissions.manage_messages or ctx.author.guild_permissions.kick_members
     return commands.check(predicate)
 
 
 def has_admin_permissions():
-    """Vérifie si l'utilisateur est administrateur."""
     def predicate(ctx):
         return ctx.author.guild_permissions.administrator
     return commands.check(predicate)
 
 
 def has_ban_permissions():
-    """Vérifie si l'utilisateur peut bannir."""
     def predicate(ctx):
         return ctx.author.guild_permissions.ban_members
     return commands.check(predicate)
 
 
 async def check_hierarchy(ctx, target_member):
-    """Vérifie que le modérateur et le bot peuvent agir sur la cible."""
     if target_member == ctx.author:
         await ctx.send("❌ Vous ne pouvez pas utiliser cette commande sur vous-même !")
         return False
@@ -41,7 +37,6 @@ async def check_hierarchy(ctx, target_member):
 
 
 async def ensure_mute_role(guild):
-    """Crée ou récupère le rôle Muted avec les permissions appropriées."""
     from config import MUTE_ROLE_NAME
 
     mute_role = discord.utils.get(guild.roles, name=MUTE_ROLE_NAME)

@@ -3,10 +3,6 @@ import re
 from datetime import datetime, timedelta
 from config import DATABASE_PATH
 
-# ---------------------------------------------------------------------------
-# Automod config defaults
-# ---------------------------------------------------------------------------
-
 AUTOMOD_DEFAULTS = {
     'spam_threshold': 5,
     'spam_interval': 10,
@@ -32,10 +28,6 @@ AUTOMOD_CONFIG_COLS = [
     'pts_kick', 'pts_ban', 'pts_ban_duration',
 ]
 
-
-# ---------------------------------------------------------------------------
-# Init
-# ---------------------------------------------------------------------------
 
 def init_db():
     conn = sqlite3.connect(DATABASE_PATH)
@@ -113,7 +105,6 @@ def init_db():
         pts_ban_duration INTEGER DEFAULT 3600
     )''')
 
-    # Migrations
     for col, typedef in [
         ('unmute_at', 'DATETIME'),
         ('rules_text', 'TEXT'),
@@ -139,10 +130,6 @@ def init_db():
     conn.close()
 
 
-# ---------------------------------------------------------------------------
-# Duration helpers
-# ---------------------------------------------------------------------------
-
 def parse_duration(duration_str: str) -> int | None:
     pattern = re.fullmatch(r'(\d+)([smhd])', duration_str.strip().lower())
     if not pattern:
@@ -164,10 +151,6 @@ def format_duration(seconds: int) -> str:
     return f"{d} jour{'s' if d > 1 else ''}"
 
 
-# ---------------------------------------------------------------------------
-# Warnings
-# ---------------------------------------------------------------------------
-
 def add_warning(guild_id: int, user_id: int, moderator_id: int, reason: str):
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.execute(
@@ -188,10 +171,6 @@ def clear_warnings(guild_id: int, user_id: int):
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.execute('DELETE FROM warnings WHERE guild_id=? AND user_id=?', (guild_id, user_id))
 
-
-# ---------------------------------------------------------------------------
-# Mutes
-# ---------------------------------------------------------------------------
 
 def add_mute(guild_id: int, user_id: int, moderator_id: int, reason: str, unmute_at: datetime = None):
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -216,10 +195,6 @@ def get_active_timed_mutes():
         ).fetchall()
 
 
-# ---------------------------------------------------------------------------
-# Tempbans
-# ---------------------------------------------------------------------------
-
 def add_tempban(guild_id: int, user_id: int, moderator_id: int, reason: str, unban_at: datetime):
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.execute(
@@ -242,10 +217,6 @@ def get_active_tempbans():
             'SELECT guild_id, user_id, unban_at FROM tempbans WHERE active=1'
         ).fetchall()
 
-
-# ---------------------------------------------------------------------------
-# Sanctions (avec case_id par guild)
-# ---------------------------------------------------------------------------
 
 def add_sanction(guild_id: int, user_id: int, moderator_id: int, action: str,
                  reason: str = None, duration: str = None) -> int:
@@ -287,10 +258,6 @@ def get_sanctions(guild_id: int, user_id: int):
         ).fetchall()
 
 
-# ---------------------------------------------------------------------------
-# Violation points
-# ---------------------------------------------------------------------------
-
 def get_violation_points(guild_id: int, user_id: int) -> int:
     with sqlite3.connect(DATABASE_PATH) as conn:
         row = conn.execute(
@@ -331,10 +298,6 @@ def reset_violation_points(guild_id: int, user_id: int):
         )
 
 
-# ---------------------------------------------------------------------------
-# Blacklist
-# ---------------------------------------------------------------------------
-
 def add_blacklist_word(guild_id: int, word: str, added_by: int):
     with sqlite3.connect(DATABASE_PATH) as conn:
         conn.execute(
@@ -358,10 +321,6 @@ def get_blacklist_words(guild_id: int) -> list[str]:
             'SELECT word FROM word_blacklist WHERE guild_id=?', (guild_id,)
         ).fetchall()]
 
-
-# ---------------------------------------------------------------------------
-# Automod config
-# ---------------------------------------------------------------------------
 
 def get_automod_config(guild_id: int) -> dict:
     with sqlite3.connect(DATABASE_PATH) as conn:
@@ -388,10 +347,6 @@ def update_automod_config(guild_id: int, **kwargs):
             [guild_id] + [current[c] for c in cols]
         )
 
-
-# ---------------------------------------------------------------------------
-# Guild settings
-# ---------------------------------------------------------------------------
 
 _SETTINGS_COLS = [
     'log_channel_id', 'mute_role_id', 'automod_enabled', 'spam_detection',

@@ -3,7 +3,6 @@ from typing import List
 
 
 class PaginationView(discord.ui.View):
-    """Vue de pagination avec boutons Précédent / Suivant."""
 
     def __init__(self, embeds: List[discord.Embed], author_id: int = None, timeout: int = 120):
         super().__init__(timeout=timeout)
@@ -49,7 +48,6 @@ class PaginationView(discord.ui.View):
 
 
 class ConfirmView(discord.ui.View):
-    """Vue de confirmation avec boutons Confirmer / Annuler."""
 
     def __init__(self, author_id: int, timeout: int = 30):
         super().__init__(timeout=timeout)
@@ -83,10 +81,6 @@ class ConfirmView(discord.ui.View):
 
 def build_pages(entries: list, title: str, color: int,
                 per_page: int = 5, entry_formatter=None) -> List[discord.Embed]:
-    """
-    Découpe `entries` en pages d'embeds.
-    `entry_formatter(i, entry) -> (name, value)` construit chaque field.
-    """
     pages = []
     for start in range(0, max(len(entries), 1), per_page):
         chunk = entries[start:start + per_page]

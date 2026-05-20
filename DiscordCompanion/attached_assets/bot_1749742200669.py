@@ -5,7 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 intents = discord.Intents.default()
-intents.members = True  # Active l'accès aux membres du serveur
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
@@ -30,5 +30,5 @@ async def fdpduserv(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="turc", description="kardesh")
 async def turc(interaction: discord.Interaction):
     await interaction.response.send_message("Arap tout casser et flemmard et vendre shit et voler Nous kardeshim faire kredi por bmw a 16 ans vous arap tout casser turk tout reparer MEHMET IL EST OÙ MON AYRAN BRRRRRRRRR SKIBIDI DOP DOP YES YES YES MANGER KEBAB JAMAIS MALAD")
-# Remplace par le token de ton bot
+
 bot.run("MTMzMzgyMjQ3MjE1MTM2Nzc0Mg.GB2sLG.YWDYaMeBqzSevFgk_hF4AcT6t-KSAhm7Cv64qA")

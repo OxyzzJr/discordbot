@@ -13,13 +13,11 @@ ROLE_SOUMISES = "soumises"
 
 
 class ShabView(discord.ui.View):
-    """Boutons Oui / Non envoyés dans le salon modérateur à chaque arrivée."""
 
     def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)  # persistant jusqu'au redémarrage
+        super().__init__(timeout=None)
         self.member = member
 
-    # ------------------------------------------------------------------ Oui
     @discord.ui.button(label="✅ Oui", style=discord.ButtonStyle.danger, custom_id="shab_oui")
     async def oui(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.manage_roles:
@@ -60,7 +58,6 @@ class ShabView(discord.ui.View):
         embed.set_footer(text=f"✅ Rôle '{ROLE_SOUMISES}' attribué par {interaction.user} • {datetime.utcnow().strftime('%H:%M:%S')}")
         await interaction.response.edit_message(embed=embed, view=self)
 
-    # ------------------------------------------------------------------ Non
     @discord.ui.button(label="❌ Non", style=discord.ButtonStyle.success, custom_id="shab_non")
     async def non(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.manage_roles:
@@ -75,7 +72,6 @@ class ShabView(discord.ui.View):
         embed.set_footer(text=f"✅ Confirmé : pas un shab — {interaction.user} • {datetime.utcnow().strftime('%H:%M:%S')}")
         await interaction.response.edit_message(embed=embed, view=self)
 
-    # ------------------------------------------------------------------ util
     def _disable_all(self):
         for item in self.children:
             item.disabled = True
@@ -87,7 +83,6 @@ class AutoRole(commands.Cog):
 
     def _get_mod_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
         settings = get_guild_settings(guild.id)
-        # mod_channel_id est le 8e champ (index 7)
         if settings and len(settings) > 7 and settings[7]:
             return guild.get_channel(settings[7])
         return None
@@ -124,7 +119,6 @@ class AutoRole(commands.Cog):
         except discord.Forbidden:
             logger.error(f"[AutoRole] Permission refusée pour écrire dans {mod_channel.name}")
 
-    # ------------------------------------------------------------------ /setmodchannel
     @app_commands.command(
         name="setmodchannel",
         description="Définir le salon modérateur où arrivent les vérifications de nouveaux membres",
@@ -156,7 +150,6 @@ class AutoRole(commands.Cog):
                 "❌ Tu dois être administrateur pour configurer ce salon.", ephemeral=True
             )
 
-    # ------------------------------------------------------------------ /autorole_create_soumises
     @app_commands.command(
         name="autorole_create_soumises",
         description="Crée le rôle 'soumises' s'il n'existe pas encore",

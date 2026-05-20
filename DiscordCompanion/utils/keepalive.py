@@ -36,7 +36,6 @@ def run():
 
 
 def keep_alive():
-    """Démarre le serveur Flask dans un thread daemon pour le fonctionnement 24/7."""
     t = Thread(target=run)
     t.daemon = True
     t.start()

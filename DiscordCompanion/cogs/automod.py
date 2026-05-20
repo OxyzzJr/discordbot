@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 import asyncio
 
 
-# Emojis de niveau de violation
 LEVEL_COLORS = {
     'info':    0x3498db,
     'warn':    0xf39c12,
@@ -26,7 +25,6 @@ LEVEL_COLORS = {
 
 
 class AutoMod(commands.Cog):
-    # Cache blacklist par guild_id → liste de mots
     _blacklist_cache: dict[int, list[str]] = {}
 
     def __init__(self, bot):
@@ -40,10 +38,6 @@ class AutoMod(commands.Cog):
         )
         self.spam_words = ['spam', 'scam', 'free nitro', 'free money', 'click here', 'nitro gratuit']
 
-    # ------------------------------------------------------------------
-    # Cache blacklist
-    # ------------------------------------------------------------------
-
     def get_blacklist(self, guild_id: int) -> list[str]:
         if guild_id not in self._blacklist_cache:
             self._blacklist_cache[guild_id] = get_blacklist_words(guild_id)
@@ -51,10 +45,6 @@ class AutoMod(commands.Cog):
 
     def invalidate_cache(self, guild_id: int):
         self._blacklist_cache.pop(guild_id, None)
-
-    # ------------------------------------------------------------------
-    # Listener principal
-    # ------------------------------------------------------------------
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -75,10 +65,6 @@ class AutoMod(commands.Cog):
     async def on_message_edit(self, before, after):
         if before.content != after.content:
             await self.on_message(after)
-
-    # ------------------------------------------------------------------
-    # Détections
-    # ------------------------------------------------------------------
 
     async def _check_spam(self, message):
         uid = message.author.id
@@ -165,10 +151,6 @@ class AutoMod(commands.Cog):
             await self._delete_message(message)
             await self._apply_violation(message, f"Flood de fichiers ({len(message.attachments)} fichiers)", points=2)
 
-    # ------------------------------------------------------------------
-    # Système de points de violation
-    # ------------------------------------------------------------------
-
     async def _apply_violation(self, message, reason: str, points: int):
         guild = message.guild
         member = message.author
@@ -185,7 +167,6 @@ class AutoMod(commands.Cog):
         elif total >= cfg['pts_warn']:
             await self._action_warn(message, reason, total)
         else:
-            # Simple notification, pas d'action
             await self._notify(message, reason, points, total)
 
     async def _notify(self, message, reason: str, points: int, total: int):
@@ -329,10 +310,6 @@ class AutoMod(commands.Cog):
             await msg.delete(delay=15)
         except discord.Forbidden:
             pass
-
-    # ------------------------------------------------------------------
-    # Utilitaire
-    # ------------------------------------------------------------------
 
     async def _delete_message(self, message):
         try:

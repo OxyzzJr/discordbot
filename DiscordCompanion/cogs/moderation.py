@@ -35,10 +35,6 @@ class Moderation(commands.Cog):
     async def cog_unload(self):
         self.check_expired_punishments.cancel()
 
-    # ------------------------------------------------------------------
-    # Background task
-    # ------------------------------------------------------------------
-
     @tasks.loop(minutes=1)
     async def check_expired_punishments(self):
         now = datetime.utcnow()
@@ -78,10 +74,6 @@ class Moderation(commands.Cog):
     async def before_check(self):
         await self.bot.wait_until_ready()
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     def _case_footer(self, case_id: int, member_id: int) -> str:
         return f"Case #{case_id} • ID : {member_id}"
 
@@ -92,7 +84,6 @@ class Moderation(commands.Cog):
             pass
 
     async def _confirm_action(self, interaction: discord.Interaction, preview_embed: discord.Embed) -> bool:
-        """Affiche un embed de confirmation et retourne True si confirmé."""
         view = ConfirmView(interaction.user.id)
         await interaction.response.send_message(embed=preview_embed, view=view, ephemeral=True)
         await view.wait()
@@ -100,10 +91,6 @@ class Moderation(commands.Cog):
             annule = discord.Embed(title="❌ Action Annulée", color=COLORS['error'])
             await interaction.edit_original_response(embed=annule, view=None)
         return bool(view.value)
-
-    # ------------------------------------------------------------------
-    # /kick
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="kick", description="Expulser un membre du serveur")
     @app_commands.describe(member="Le membre à expulser", raison="Raison de l'expulsion")
@@ -144,10 +131,6 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
 
-    # ------------------------------------------------------------------
-    # /ban
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="ban", description="Bannir un membre du serveur")
     @app_commands.describe(member="Le membre à bannir", raison="Raison du bannissement", supprimer_jours="Jours de messages à supprimer (0-7)")
     async def ban(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie", supprimer_jours: int = 0):
@@ -185,10 +168,6 @@ class Moderation(commands.Cog):
             await interaction.edit_original_response(embed=embed, view=None)
         except discord.Forbidden:
             await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
-
-    # ------------------------------------------------------------------
-    # /tempban
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="tempban", description="Bannir temporairement un membre")
     @app_commands.describe(member="Le membre à bannir", duree="Durée (ex: 10m, 2h, 1d)", raison="Raison")
@@ -229,10 +208,6 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await interaction.edit_original_response(embed=discord.Embed(title="❌ Permission refusée", color=COLORS['error']), view=None)
 
-    # ------------------------------------------------------------------
-    # /unban
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="unban", description="Débannir un utilisateur du serveur")
     @app_commands.describe(user_id="L'ID de l'utilisateur à débannir", raison="Raison")
     async def unban(self, interaction: discord.Interaction, user_id: str, raison: str = "Aucune raison fournie"):
@@ -261,10 +236,6 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Erreur : {e}", ephemeral=True)
-
-    # ------------------------------------------------------------------
-    # /mute
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="mute", description="Rendre muet un membre")
     @app_commands.describe(member="Le membre à rendre muet", duree="Durée optionnelle (ex: 10m, 2h)", raison="Raison")
@@ -316,10 +287,6 @@ class Moderation(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    # /unmute
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="unmute", description="Retirer le mute d'un membre")
     @app_commands.describe(member="Le membre à unmute", raison="Raison")
     async def unmute(self, interaction: discord.Interaction, member: discord.Member, raison: str = "Aucune raison fournie"):
@@ -341,10 +308,6 @@ class Moderation(commands.Cog):
             await interaction.response.send_message(embed=embed)
         except discord.Forbidden:
             await interaction.response.send_message("❌ Permission refusée !", ephemeral=True)
-
-    # ------------------------------------------------------------------
-    # /warn
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="warn", description="Avertir un membre")
     @app_commands.describe(member="Le membre à avertir", raison="Raison")
@@ -379,10 +342,6 @@ class Moderation(commands.Cog):
             color=COLORS['warning']
         ).add_field(name="Raison", value=raison).add_field(name="Avertissements", value=f"{count}/{MAX_WARNINGS}"))
 
-    # ------------------------------------------------------------------
-    # /warnings
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="warnings", description="Voir les avertissements d'un membre")
     @app_commands.describe(member="Le membre concerné")
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
@@ -409,10 +368,6 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=pages[0], view=view)
         view.message = await interaction.original_response()
 
-    # ------------------------------------------------------------------
-    # /clearwarnings
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="clearwarnings", description="Effacer tous les avertissements d'un membre")
     @app_commands.describe(member="Le membre concerné")
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
@@ -427,14 +382,9 @@ class Moderation(commands.Cog):
         embed.set_footer(text=f"ID : {member.id}")
         await interaction.response.send_message(embed=embed)
 
-    # ------------------------------------------------------------------
-    # /purge
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="purge", description="Supprimer plusieurs messages d'un coup")
     @app_commands.describe(nombre="Nombre de messages (1-100)", membre="Ne supprimer que les messages de ce membre")
     async def purge(self, interaction: discord.Interaction, nombre: int, membre: discord.Member = None):
-        # Defer en premier — les vérifications viennent ensuite via followup
         await interaction.response.defer(ephemeral=True)
         if not interaction.user.guild_permissions.manage_messages:
             return await interaction.followup.send("❌ Permission insuffisante !", ephemeral=True)
@@ -452,10 +402,6 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("❌ Permission refusée !", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    # /slowmode
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="slowmode", description="Activer ou désactiver le mode lent sur un salon")
     @app_commands.describe(secondes="Délai en secondes (0 = désactiver, max 21600)", salon="Salon (défaut : actuel)")
     async def slowmode(self, interaction: discord.Interaction, secondes: int = 0, salon: discord.TextChannel = None):
@@ -472,10 +418,6 @@ class Moderation(commands.Cog):
             embed.add_field(name="Délai", value=format_duration(secondes))
         embed.add_field(name="Modérateur", value=interaction.user.mention)
         await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /userinfo
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="userinfo", description="Informations complètes sur un membre")
     @app_commands.describe(member="Le membre à inspecter (défaut : vous-même)")
@@ -503,10 +445,6 @@ class Moderation(commands.Cog):
         embed.set_footer(text=f"ID : {member.id}")
         await interaction.response.send_message(embed=embed)
 
-    # ------------------------------------------------------------------
-    # /serverinfo
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="serverinfo", description="Informations sur le serveur")
     async def serverinfo(self, interaction: discord.Interaction):
         g = interaction.guild
@@ -523,10 +461,6 @@ class Moderation(commands.Cog):
         embed.add_field(name="Niveau de boost", value=str(g.premium_tier), inline=True)
         embed.add_field(name="Vérification", value=str(g.verification_level).capitalize(), inline=True)
         await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /historique
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="historique", description="Historique des sanctions d'un membre")
     @app_commands.describe(member="Le membre concerné")
@@ -562,10 +496,6 @@ class Moderation(commands.Cog):
         view = PaginationView(pages, author_id=interaction.user.id)
         await interaction.response.send_message(embed=pages[0], view=view)
         view.message = await interaction.original_response()
-
-    # ------------------------------------------------------------------
-    # /case + /editcase
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="case", description="Consulter un case de modération")
     @app_commands.describe(numero="Numéro du case")
@@ -609,10 +539,6 @@ class Moderation(commands.Cog):
         else:
             await interaction.response.send_message(f"❌ Case #{numero} introuvable.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    # /regles + /setregles
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="regles", description="Afficher les règles du serveur")
     async def regles(self, interaction: discord.Interaction):
         settings = get_guild_settings(interaction.guild.id)
@@ -632,10 +558,6 @@ class Moderation(commands.Cog):
         embed = discord.Embed(title="✅ Règles Mises à Jour", color=COLORS['success'])
         embed.add_field(name="Aperçu", value=texte[:500] + ("..." if len(texte) > 500 else ""))
         await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /blacklist
-    # ------------------------------------------------------------------
 
     blacklist_group = app_commands.Group(name="blacklist", description="Gérer la liste noire de mots")
 
@@ -673,10 +595,6 @@ class Moderation(commands.Cog):
         embed = discord.Embed(title="🚫 Liste Noire", description="\n".join(f"• `{w}`" for w in words), color=COLORS['error'])
         embed.set_footer(text=f"{len(words)} mot(s) interdit(s)")
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ------------------------------------------------------------------
-    # /automod
-    # ------------------------------------------------------------------
 
     automod_group = app_commands.Group(name="automod", description="Configuration de l'auto-modération")
 
@@ -733,10 +651,6 @@ class Moderation(commands.Cog):
         reset_violation_points(interaction.guild.id, member.id)
         await interaction.response.send_message(f"✅ Points d'infraction de **{member}** réinitialisés.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    # /setwelcome
-    # ------------------------------------------------------------------
-
     @app_commands.command(name="setwelcome", description="Configurer le message de bienvenue")
     @app_commands.describe(salon="Salon de bienvenue", message="Message ({mention}, {server}, {count})")
     async def setwelcome(self, interaction: discord.Interaction, salon: discord.TextChannel, message: str = None):
@@ -748,10 +662,6 @@ class Moderation(commands.Cog):
         embed.add_field(name="Message", value=message or "*(Par défaut)* Bienvenue sur **{server}**, {mention} ! 🎉")
         embed.add_field(name="Variables", value="`{mention}` `{server}` `{count}`", inline=False)
         await interaction.response.send_message(embed=embed)
-
-    # ------------------------------------------------------------------
-    # /modhelp
-    # ------------------------------------------------------------------
 
     @app_commands.command(name="modhelp", description="Afficher toutes les commandes de modération")
     async def modhelp(self, interaction: discord.Interaction):

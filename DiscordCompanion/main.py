@@ -7,14 +7,11 @@ import sqlite3
 from utils.keepalive import keep_alive
 import logging
 
-# Load environment variables
 load_dotenv()
 
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Bot configuration
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -32,12 +29,9 @@ class ModerationBot(commands.Bot):
                          guild_ready_timeout=10.0)
 
     async def setup_hook(self):
-        """Load cogs and sync commands"""
-        # Initialize database
         from utils.database import init_db
         init_db()
 
-        # Load cogs
         try:
             await self.load_extension('cogs.moderation')
             await self.load_extension('cogs.automod')
@@ -47,7 +41,6 @@ class ModerationBot(commands.Bot):
         except Exception as e:
             print(f"Error loading cogs: {e}")
 
-        # Sync slash commands
         try:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} slash commands")
@@ -58,7 +51,6 @@ class ModerationBot(commands.Bot):
         logger.info(f'{self.user} is now online!')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
 
-        # Set bot status
         await self.change_presence(
             activity=discord.Activity(type=discord.ActivityType.watching,
                                       name="les violations de règles"))
@@ -70,7 +62,6 @@ class ModerationBot(commands.Bot):
         logger.info("Bot reconnected to Discord successfully")
 
     async def on_command_error(self, ctx, error):
-        """Global error handler"""
         if isinstance(error, commands.MissingPermissions):
             await ctx.send("❌ Ta pas les perms chef.")
         elif isinstance(error, commands.BotMissingPermissions):
@@ -86,13 +77,11 @@ class ModerationBot(commands.Bot):
 
 
 async def main():
-    # Start keep-alive server once (runs in daemon thread)
     keep_alive()
 
     while True:
         bot = ModerationBot()
 
-        # Get token from environment variable
         token = os.getenv('DISCORD_TOKEN')
         if not token:
             logger.error("DISCORD_TOKEN not found in environment variables!")

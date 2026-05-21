@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 ROLE_SOUMISES = "soumises"
 
 
+
 class ShabView(discord.ui.View):
 
     def __init__(self, member: discord.Member):

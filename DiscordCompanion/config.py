@@ -21,3 +21,4 @@ COLORS = {
     'warning': 0xffff00,
     'info': 0x0099ff
 }
+

@@ -7,10 +7,7 @@ from utils.database import (
     add_mute, remove_mute, get_active_timed_mutes,
     add_tempban, deactivate_tempban, get_active_tempbans,
     add_sanction, get_sanctions, get_case, edit_case_reason,
-    add_blacklist_word, remove_blacklist_word, get_blacklist_words,
     update_guild_settings, get_guild_settings,
-    get_automod_config, update_automod_config,
-    get_violation_points, reset_violation_points,
     parse_duration, format_duration,
 )
 from utils.ui import PaginationView, ConfirmView, build_pages
@@ -424,7 +421,6 @@ class Moderation(commands.Cog):
     async def userinfo(self, interaction: discord.Interaction, member: discord.Member = None):
         member = member or interaction.user
         sanctions = get_sanctions(interaction.guild.id, member.id)
-        pts = get_violation_points(interaction.guild.id, member.id)
 
         roles = [r.mention for r in reversed(member.roles) if r != interaction.guild.default_role]
         roles_str = " ".join(roles[:10]) + (f" *+{len(roles) - 10} autres*" if len(roles) > 10 else "") if roles else "Aucun rôle"
@@ -439,7 +435,6 @@ class Moderation(commands.Cog):
         embed.add_field(name="Bot", value="Oui" if member.bot else "Non", inline=True)
         embed.add_field(name=f"Rôles ({len(member.roles) - 1})", value=roles_str, inline=False)
         embed.add_field(name="Sanctions enregistrées", value=str(len(sanctions)), inline=True)
-        embed.add_field(name="Points auto-mod", value=str(pts), inline=True)
         if member.premium_since:
             embed.add_field(name="Boost depuis", value=f"<t:{int(member.premium_since.timestamp())}:D>", inline=True)
         embed.set_footer(text=f"ID : {member.id}")
@@ -559,98 +554,6 @@ class Moderation(commands.Cog):
         embed.add_field(name="Aperçu", value=texte[:500] + ("..." if len(texte) > 500 else ""))
         await interaction.response.send_message(embed=embed)
 
-    blacklist_group = app_commands.Group(name="blacklist", description="Gérer la liste noire de mots")
-
-    @blacklist_group.command(name="ajouter", description="Ajouter un mot à la liste noire")
-    @app_commands.describe(mot="Le mot à interdire")
-    async def blacklist_add(self, interaction: discord.Interaction, mot: str):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
-        add_blacklist_word(interaction.guild.id, mot, interaction.user.id)
-        automod = self.bot.get_cog('AutoMod')
-        if automod:
-            automod.invalidate_cache(interaction.guild.id)
-        await interaction.response.send_message(f"✅ Le mot **{mot}** a été ajouté à la liste noire.", ephemeral=True)
-
-    @blacklist_group.command(name="retirer", description="Retirer un mot de la liste noire")
-    @app_commands.describe(mot="Le mot à retirer")
-    async def blacklist_remove(self, interaction: discord.Interaction, mot: str):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
-        if remove_blacklist_word(interaction.guild.id, mot):
-            automod = self.bot.get_cog('AutoMod')
-            if automod:
-                automod.invalidate_cache(interaction.guild.id)
-            await interaction.response.send_message(f"✅ Le mot **{mot}** a été retiré de la liste noire.", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ Le mot **{mot}** n'est pas dans la liste noire.", ephemeral=True)
-
-    @blacklist_group.command(name="liste", description="Voir les mots de la liste noire")
-    async def blacklist_list(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_messages:
-            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
-        words = get_blacklist_words(interaction.guild.id)
-        if not words:
-            return await interaction.response.send_message("✅ La liste noire est vide.", ephemeral=True)
-        embed = discord.Embed(title="🚫 Liste Noire", description="\n".join(f"• `{w}`" for w in words), color=COLORS['error'])
-        embed.set_footer(text=f"{len(words)} mot(s) interdit(s)")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    automod_group = app_commands.Group(name="automod", description="Configuration de l'auto-modération")
-
-    @automod_group.command(name="config", description="Voir la configuration de l'auto-modération")
-    async def automod_config(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
-
-        cfg = get_automod_config(interaction.guild.id)
-        embed = discord.Embed(title="⚙️ Configuration Auto-Modération", color=COLORS['info'])
-        embed.add_field(name="🔍 Détection spam", value=f"Seuil : **{cfg['spam_threshold']}** msgs / **{cfg['spam_interval']}**s", inline=True)
-        embed.add_field(name="📢 Mentions max", value=f"**{cfg['max_mentions']}** mentions", inline=True)
-        embed.add_field(name="🔠 Majuscules", value=f"{'✅ Actif' if cfg['caps_detection'] else '❌ Inactif'} — **{cfg['caps_percent']}**% min **{cfg['caps_min_length']}** lettres", inline=True)
-        embed.add_field(name="📎 Flood de fichiers", value=f"**{cfg['file_flood_limit']}** fichiers / **{cfg['file_flood_interval']}**s", inline=True)
-        embed.add_field(name="⚠️ Seuils de sanction", value=(
-            f"Avertissement : **{cfg['pts_warn']}** pts\n"
-            f"Mute ({format_duration(cfg['pts_mute_duration'])}) : **{cfg['pts_mute']}** pts\n"
-            f"Expulsion : **{cfg['pts_kick']}** pts\n"
-            f"Tempban ({format_duration(cfg['pts_ban_duration'])}) : **{cfg['pts_ban']}** pts"
-        ), inline=False)
-        embed.set_footer(text="Utilisez /automod set <paramètre> <valeur> pour modifier")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @automod_group.command(name="set", description="Modifier un paramètre de l'auto-modération")
-    @app_commands.describe(
-        parametre="Paramètre à modifier",
-        valeur="Nouvelle valeur (nombre entier)"
-    )
-    @app_commands.choices(parametre=[
-        app_commands.Choice(name="Seuil spam (messages)", value="spam_threshold"),
-        app_commands.Choice(name="Intervalle spam (secondes)", value="spam_interval"),
-        app_commands.Choice(name="Mentions max", value="max_mentions"),
-        app_commands.Choice(name="Détection majuscules (0/1)", value="caps_detection"),
-        app_commands.Choice(name="Seuil majuscules (%)", value="caps_percent"),
-        app_commands.Choice(name="Limite fichiers flood", value="file_flood_limit"),
-        app_commands.Choice(name="Points → avertissement", value="pts_warn"),
-        app_commands.Choice(name="Points → mute", value="pts_mute"),
-        app_commands.Choice(name="Durée mute auto (secondes)", value="pts_mute_duration"),
-        app_commands.Choice(name="Points → expulsion", value="pts_kick"),
-        app_commands.Choice(name="Points → tempban", value="pts_ban"),
-        app_commands.Choice(name="Durée tempban auto (secondes)", value="pts_ban_duration"),
-    ])
-    async def automod_set(self, interaction: discord.Interaction, parametre: str, valeur: int):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("❌ Administrateur requis !", ephemeral=True)
-        update_automod_config(interaction.guild.id, **{parametre: valeur})
-        await interaction.response.send_message(f"✅ `{parametre}` mis à jour → **{valeur}**", ephemeral=True)
-
-    @automod_group.command(name="resetpoints", description="Réinitialiser les points d'infraction d'un membre")
-    @app_commands.describe(member="Le membre concerné")
-    async def automod_reset(self, interaction: discord.Interaction, member: discord.Member):
-        if not interaction.user.guild_permissions.manage_messages:
-            return await interaction.response.send_message("❌ Permission insuffisante !", ephemeral=True)
-        reset_violation_points(interaction.guild.id, member.id)
-        await interaction.response.send_message(f"✅ Points d'infraction de **{member}** réinitialisés.", ephemeral=True)
-
     @app_commands.command(name="setwelcome", description="Configurer le message de bienvenue")
     @app_commands.describe(salon="Salon de bienvenue", message="Message ({mention}, {server}, {count})")
     async def setwelcome(self, interaction: discord.Interaction, salon: discord.TextChannel, message: str = None):
@@ -684,11 +587,9 @@ class Moderation(commands.Cog):
             "`/historique` — Historique des sanctions\n`/regles` — Règles du serveur"
         ), inline=False)
         embed.add_field(name="⚙️ Config (Admin)", value=(
-            "`/setlogchannel` — Salon de logs\n`/setregles` — Règles\n`/setwelcome` — Bienvenue\n"
-            "`/blacklist ajouter/retirer/liste` — Liste noire\n"
-            "`/automod config` — Voir la config auto-mod\n"
-            "`/automod set` — Modifier un paramètre\n"
-            "`/automod resetpoints` — Réinitialiser les points d'un membre"
+            "`/setlogchannel` — Salon de logs\n`/setmodchannel` — Salon modérateur\n"
+            "`/setregles` — Règles\n`/setwelcome` — Bienvenue\n"
+            "`/autorole_create_soumises` — Créer le rôle soumises"
         ), inline=False)
         embed.set_footer(text="Formats de durée acceptés : 30s • 10m • 2h • 1d")
         await interaction.response.send_message(embed=embed)

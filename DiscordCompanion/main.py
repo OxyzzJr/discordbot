@@ -34,7 +34,6 @@ class ModerationBot(commands.Bot):
 
         try:
             await self.load_extension('cogs.moderation')
-            await self.load_extension('cogs.automod')
             await self.load_extension('cogs.logging')
             await self.load_extension('cogs.autorole')
             print("All cogs loaded successfully")

@@ -251,6 +251,7 @@ class EventLogger(commands.Cog):
     ):
         guild = member.guild
 
+        # ── Changements de salon ──────────────────────────────────────────────
         if before.channel is None and after.channel is not None:
             embed = discord.Embed(
                 title="🔊  Rejoint un Vocal",
@@ -293,40 +294,91 @@ class EventLogger(commands.Cog):
             and before.channel != after.channel
         ):
             entry = await self._audit(guild, discord.AuditLogAction.member_move, delay=5)
-            embed = discord.Embed(
-                title="🔀  Déplacé dans un Vocal",
-                description=f"{member.mention} a changé de salon vocal.",
-                color=C_VOICE,
-                timestamp=self._now()
-            )
-            embed.add_field(name="👤 Membre", value=f"`{member}`",          inline=True)
-            embed.add_field(name="📢 Avant",  value=before.channel.mention, inline=True)
-            embed.add_field(name="📢 Après",  value=after.channel.mention,  inline=True)
             if entry:
-                embed.add_field(name="🛡️ Déplacé par", value=entry.user.mention, inline=True)
-            embed.set_footer(text=f"ID : {member.id}")
-            await self._log(guild, embed)
-
-        elif before.channel == after.channel and after.channel is not None:
-            if before.mute != after.mute:
-                state = "muté" if after.mute else "démuté"
                 embed = discord.Embed(
-                    title=f"🔇  {'Muté' if after.mute else 'Démuté'} (serveur)",
-                    description=f"{member.mention} a été **{state}** par le serveur.",
+                    title="🔀  Déplacé par un Modérateur",
+                    description=f"{member.mention} a été déplacé dans un autre salon vocal.",
                     color=C_WARN,
                     timestamp=self._now()
                 )
+                embed.add_field(name="👤 Membre",       value=f"`{member}`",          inline=True)
+                embed.add_field(name="📢 Avant",        value=before.channel.mention, inline=True)
+                embed.add_field(name="📢 Après",        value=after.channel.mention,  inline=True)
+                embed.add_field(name="🛡️ Déplacé par", value=entry.user.mention,     inline=True)
+            else:
+                embed = discord.Embed(
+                    title="🔀  Changé de Vocal",
+                    description=f"{member.mention} a changé de salon vocal par lui-même.",
+                    color=C_VOICE,
+                    timestamp=self._now()
+                )
                 embed.add_field(name="👤 Membre", value=f"`{member}`",          inline=True)
-                embed.add_field(name="📢 Salon",  value=after.channel.mention,  inline=True)
+                embed.add_field(name="📢 Avant",  value=before.channel.mention, inline=True)
+                embed.add_field(name="📢 Après",  value=after.channel.mention,  inline=True)
+            embed.set_footer(text=f"ID : {member.id}")
+            await self._log(guild, embed)
+
+        # ── Changements d'état (même salon) ──────────────────────────────────
+        elif before.channel == after.channel and after.channel is not None:
+
+            # Mute serveur (par un modo)
+            if before.mute != after.mute:
+                embed = discord.Embed(
+                    title=f"🔇  {'Muté' if after.mute else 'Démuté'} (serveur)",
+                    description=f"{member.mention} a été **{'muté' if after.mute else 'démuté'}** par le serveur.",
+                    color=C_WARN,
+                    timestamp=self._now()
+                )
+                embed.add_field(name="👤 Membre", value=f"`{member}`",         inline=True)
+                embed.add_field(name="📢 Salon",  value=after.channel.mention, inline=True)
                 embed.set_footer(text=f"ID : {member.id}")
                 await self._log(guild, embed)
 
-            elif before.deaf != after.deaf:
-                state = "sourdé" if after.deaf else "désourdé"
+            # Sourdine serveur (par un modo)
+            if before.deaf != after.deaf:
                 embed = discord.Embed(
-                    title=f"🙉  {'Sourdé' if after.deaf else 'Désourdé'} (serveur)",
-                    description=f"{member.mention} a été **{state}** par le serveur.",
+                    title=f"🙉  {'Sourdine' if after.deaf else 'Sourdine Levée'} (serveur)",
+                    description=f"{member.mention} a été **{'mis en sourdine' if after.deaf else 'retiré de la sourdine'}** par le serveur.",
                     color=C_WARN,
+                    timestamp=self._now()
+                )
+                embed.add_field(name="👤 Membre", value=f"`{member}`",         inline=True)
+                embed.add_field(name="📢 Salon",  value=after.channel.mention, inline=True)
+                embed.set_footer(text=f"ID : {member.id}")
+                await self._log(guild, embed)
+
+            # Self-mute (se mute soi-même)
+            if before.self_mute != after.self_mute:
+                embed = discord.Embed(
+                    title=f"🎙️  {'Muté' if after.self_mute else 'Démuté'} (soi-même)",
+                    description=f"{member.mention} s'est **{'mis en sourdine micro' if after.self_mute else 'démuté'}**.",
+                    color=C_WARN if after.self_mute else C_JOIN,
+                    timestamp=self._now()
+                )
+                embed.add_field(name="👤 Membre", value=f"`{member}`",         inline=True)
+                embed.add_field(name="📢 Salon",  value=after.channel.mention, inline=True)
+                embed.set_footer(text=f"ID : {member.id}")
+                await self._log(guild, embed)
+
+            # Self-deaf (se met en sourdine soi-même)
+            if before.self_deaf != after.self_deaf:
+                embed = discord.Embed(
+                    title=f"🔈  {'Sourdine' if after.self_deaf else 'Sourdine Levée'} (soi-même)",
+                    description=f"{member.mention} s'est **{'mis en sourdine' if after.self_deaf else 'retiré de la sourdine'}**.",
+                    color=C_WARN if after.self_deaf else C_JOIN,
+                    timestamp=self._now()
+                )
+                embed.add_field(name="👤 Membre", value=f"`{member}`",         inline=True)
+                embed.add_field(name="📢 Salon",  value=after.channel.mention, inline=True)
+                embed.set_footer(text=f"ID : {member.id}")
+                await self._log(guild, embed)
+
+            # Stream démarré / arrêté
+            if before.self_stream != after.self_stream:
+                embed = discord.Embed(
+                    title=f"📺  Stream {'Démarré' if after.self_stream else 'Terminé'}",
+                    description=f"{member.mention} a **{'lancé' if after.self_stream else 'arrêté'}** son stream.",
+                    color=C_VOICE,
                     timestamp=self._now()
                 )
                 embed.add_field(name="👤 Membre", value=f"`{member}`",         inline=True)

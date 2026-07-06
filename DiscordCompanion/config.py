@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN', '')
+OWNER_ID = int(os.getenv('OWNER_ID', 0))
 
 MAX_WARNINGS = int(os.getenv('MAX_WARNINGS', 3))
 MUTE_ROLE_NAME = os.getenv('MUTE_ROLE_NAME', 'Muted')

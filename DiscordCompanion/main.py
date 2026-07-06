@@ -36,6 +36,7 @@ class ModerationBot(commands.Bot):
             await self.load_extension('cogs.moderation')
             await self.load_extension('cogs.logging')
             await self.load_extension('cogs.autorole')
+            await self.load_extension('cogs.owner')
             print("All cogs loaded successfully")
         except Exception as e:
             print(f"Error loading cogs: {e}")

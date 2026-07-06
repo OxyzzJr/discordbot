@@ -17,6 +17,7 @@ COPY DiscordCompanion/ .
 
 RUN mkdir -p /data
 ENV DATABASE_PATH=/data/moderation.db
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 5000
 

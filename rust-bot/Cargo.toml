@@ -1,0 +1,41 @@
+[package]
+name = "discord-mod-bot"
+version = "0.1.0"
+edition = "2021"
+description = "Bot de moderation Discord - portage Rust de DiscordCompanion"
+
+[dependencies]
+poise = "0.6"
+serenity = { version = "0.12", default-features = false, features = [
+    "builder",
+    "cache",
+    "client",
+    "gateway",
+    "http",
+    "model",
+    "utils",
+    "collector",
+    "rustls_backend",
+    "temp_cache",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "signal"] }
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "chrono",
+    "macros",
+] }
+dotenvy = "0.15"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = "0.4"
+dashmap = "6"
+regex = "1"
+once_cell = "1"
+axum = { version = "0.8", default-features = false, features = ["json", "tokio", "http1"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

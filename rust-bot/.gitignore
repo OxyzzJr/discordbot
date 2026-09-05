@@ -1,0 +1,8 @@
+# Artéfacts de compilation Cargo
+/target
+
+# Variables d'environnement locales
+.env
+
+# Base SQLite locale
+*.db

@@ -1,0 +1,25 @@
+# Bot de modération — implémentation Python (DiscordCompanion/).
+#
+#   docker compose -f docker-compose.python.yml up -d --build
+#
+# Le nom de projet reste celui du dossier (« discordbot ») : ce fichier pilote
+# le conteneur et le volume déjà en place, sans rien recréer.
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: discord-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/moderation.db
+    volumes:
+      - bot_data:/data
+    ports:
+      - "5000:5000"
+
+volumes:
+  bot_data:

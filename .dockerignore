@@ -1,0 +1,9 @@
+# Le contexte de build du bot Python est la racine : on exclut tout ce qui
+# n'entre pas dans l'image (rust-bot/target pèse plusieurs Go).
+.git/
+rust-bot/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.db

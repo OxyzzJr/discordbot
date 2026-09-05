@@ -1,0 +1,34 @@
+# Bot de modération — implémentation Rust (rust-bot/).
+#
+#   docker compose -f docker-compose.rust.yml up -d --build
+#
+# Projet, conteneur, volume et port hôte sont distincts de la version Python :
+# les deux piles cohabitent sans se marcher dessus.
+#
+# ⚠️  Ne fais pas tourner les deux bots en même temps avec le MÊME
+#     DISCORD_TOKEN : Discord ouvrirait deux sessions et chaque commande
+#     recevrait deux réponses. Voir « Basculer d'une version à l'autre »
+#     dans le README.
+
+name: discordbot-rust
+
+services:
+  bot:
+    build:
+      context: ./rust-bot
+      dockerfile: Dockerfile
+    container_name: discord-bot-rust
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/moderation.db
+      # Port interne fixe ; c'est le mapping ci-dessous qui change côté hôte.
+      KEEPALIVE_PORT: 5000
+    volumes:
+      - bot_data:/data
+    ports:
+      - "5001:5000"
+
+volumes:
+  bot_data:

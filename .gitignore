@@ -5,9 +5,6 @@
 secrets.json
 config.local.py
 
-# ── Claude Code ───────────────────────────────────────────────────────────────
-.claude/
-
 # ── Base de données SQLite ────────────────────────────────────────────────────
 *.db
 *.sqlite

@@ -2,6 +2,7 @@
 .env
 .env.*
 *.env
+!.env.exemple
 secrets.json
 config.local.py
 

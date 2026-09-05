@@ -92,6 +92,13 @@ async def main():
         except discord.LoginFailure:
             logger.error("Invalid token provided!")
             break
+        except discord.PrivilegedIntentsRequired:
+            logger.error(
+                "Intents privilégiés non activés. Va sur "
+                "https://discord.com/developers/applications/ -> ton app -> Bot "
+                "-> Privileged Gateway Intents, et active SERVER MEMBERS INTENT "
+                "et MESSAGE CONTENT INTENT.")
+            break
         except discord.ConnectionClosed:
             logger.warning("Connection closed, reconnecting in 5 seconds...")
             await asyncio.sleep(5)
@@ -99,6 +106,9 @@ async def main():
             logger.error(f"Unexpected error: {e}")
             logger.info("Reconnecting in 10 seconds...")
             await asyncio.sleep(10)
+        finally:
+            if not bot.is_closed():
+                await bot.close()
 
 
 if __name__ == "__main__":
